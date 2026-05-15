@@ -14,7 +14,7 @@ https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html
 
 https://hub.docker.com/r/rainbowroboticsofficial/rby1-sim
 
-### additional setting[추가중]
+### additional setting
 ```bash
 sudo nano ~/.bashrc
 # 내용 아래에 해당 커맨드 추가
