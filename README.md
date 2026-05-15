@@ -1,17 +1,18 @@
-1# RBY1 ROS 2 Driver Package
+# RBY1 ROS 2 Driver Package
 
-# 개요
+## 개요
 `rby1_ros2`는 Rainbow Robotics의 RBY1 로봇을 ROS 2 환경에서 제어하기 위한 통합 드라이버 패키지입니다. 이 패키지는 로봇의 상태 모니터링부터 다양한 제어 모드(Joint, Cartesian, Impedance 등)를 추상화된 인터페이스를 통해 제공합니다.
 
 
-# Quick start
-## install ros2 humble
+## Quick start
+
+### install ros2 humble
 [ros2 설치링크 추가할 예정]
 
-## install rb-y1 docker
+### install rb-y1 docker
 [링크첨부예정]
 
-## additional setting[추가중]
+### additional setting[추가중]
 ```bash
 sudo nano ~/.bashrc
 # 내용 아래에 해당 커맨드 추가
@@ -20,7 +21,7 @@ alias cbp='colcon build --symlink-install --packages-select'
 alias si='source install/setup.bash'
 ```
 
-## how to build
+### how to build
 ```bash
 mkdir rby1_ros2_ws/src
 cd rby1_ros2_ws/src
@@ -28,7 +29,27 @@ git clone https://github.com/RainbowRobotics/rby1_ros2.git
 cd ..
 cb
 ```
-## Examples
+
+### set driver_parameters.yaml
+- rby1_driver/config 에 있는 yaml 파일을 통해 로봇의 기본세팅을 할 수 있습니다.
+- 해당 파일에서 연결할 로봇의 ip 와 model 을 선택할 수 있으며, 부부가적인 토픽구성, 기능 트리거를 사용할 수 있습니다.
+- 처음 패키지 빌드당시 symlink 옵션으로 빌드했기에 해당 파일을 수정할 때마다 패키지 빌드를 할 필요는 없습니다.
+
+| 파라미터 | 기본값 | 설명 |
+|---|---|---|
+| `robot_ip` | `"127.0.0.1:50051"` | 로봇 통신 IP 주소 및 포트 |
+| `model` | `"a"` | 로봇 모델 (`"a"` 또는 `"m"`) |
+| `state_topic_name` | `"joint_states"` | 상태 Publisher 및 Action Server의 기본 네임스페이스 |
+| `get_state_period` | `0.01` | 로봇 상태 Publish 주기 (초) |
+| `minimum_time` | `2.0` | 명령 수행 시 기본 최소 실행 시간 (초) |
+| `acceleration_limit` | `1.0` | 로봇 가속도 제한 스케일링 |
+| `collision_threshold` | `0.03` | 충돌 감지 임계값 (미터) |
+| `publish_power_state` | `false` | 전원 상태 토픽 활성화 여부 |
+| `publish_tool_flange` | `false` | 툴 플랜지 상태 토픽 활성화 여부 |
+| `publish_torque_velocity` | `false` | 토크 및 속도 상태 토픽 활성화 여부 |
+---
+  
+### Examples
 `rby1_examples` 패키지에는 다양한 시나리오의 예제 코드가 포함되어 있습니다.
 - 구동방식
 ```bash
@@ -51,8 +72,7 @@ ros2 run rby1_examples joint_control_example
 | zero_pose | 로봇 zero_pose로 명령 |
 ---
 
-# 패키지 구성 및 역할
-
+## 패키지 구성 및 역할
 | 패키지 | 역할 |
 |---|---|
 | `rby1_driver` | C++ 기반의 메인 드라이버 노드. RBY1 SDK를 통해 실제 로봇과 통신하며 ROS 2 인터페이스를 제공합니다. |
@@ -112,23 +132,6 @@ ros2 run rby1_examples joint_control_example
     -   Joint Group Position (특정 관절 그룹 제어)
 -   **고급 상태 모니터링**: 전원 상태, FT 센서 데이터, 툴 플랜지 IMU 및 스위치 입력 등을 실시간으로 Publish.
 -   **안전 기능**: 자가 충돌 감지(Collision Detection) 시 자동 제어 취소 기능 지원.
-
----
-
-## 주요 파라미터 (`config/driver_parameters.yaml`)
-
-| 파라미터 | 기본값 | 설명 |
-|---|---|---|
-| `robot_ip` | `"127.0.0.1:50051"` | 로봇 통신 IP 주소 및 포트 |
-| `model` | `"a"` | 로봇 모델 (`"a"` 또는 `"m"`) |
-| `state_topic_name` | `"joint_states"` | 상태 Publisher 및 Action Server의 기본 네임스페이스 |
-| `get_state_period` | `0.01` | 로봇 상태 Publish 주기 (초) |
-| `minimum_time` | `2.0` | 명령 수행 시 기본 최소 실행 시간 (초) |
-| `acceleration_limit` | `1.0` | 로봇 가속도 제한 스케일링 |
-| `collision_threshold` | `0.03` | 충돌 감지 임계값 (미터) |
-| `publish_power_state` | `false` | 전원 상태 토픽 활성화 여부 |
-| `publish_tool_flange` | `false` | 툴 플랜지 상태 토픽 활성화 여부 |
-| `publish_torque_velocity` | `false` | 토크 및 속도 상태 토픽 활성화 여부 |
 
 ---
 
