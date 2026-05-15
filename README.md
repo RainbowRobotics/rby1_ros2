@@ -31,13 +31,23 @@ cb
 ```bash
 ros2 run rby1_examples joint_control_example
 ```
-
-
-| 패키지 | 역할 |
+| example | explain |
 |---|---|
-| `rby1_driver` | C++ 기반의 메인 드라이버 노드. RBY1 SDK를 통해 실제 로봇과 통신하며 ROS 2 인터페이스를 제공합니다. |
-| `rby1_msgs` | 로봇 제어 및 상태 확인에 필요한 커스텀 메시지, 서비스, 액션 정의를 포함합니다. |
-| `rby1_examples` | 드라이버 기능을 활용하는 파이썬 기반의 다양한 제어 예제 코드를 제공합니다. |
+| cancel_control | 액션 cancel 명령으로 로봇제어 중지 + control_cancel 서비스 통신명령전송 |
+| cartesian_control | 카타시안 제어기 |
+| cartesian_impedance | 카타시안 임피던스 제어기 |
+| joint_group| torso의 joint group 제어기 명령 |
+| joint_impedance | 조인트 임피던스 명령 |
+| multi_control | 각 파트마다 다른 제어기를 활용하여 제어 |
+| multi_joint | arms,torso,head 모두를 포함한 명령전송 |
+| power_control | power,servo on/off |
+| robot_status_monitor | robot_info에서 확인 가능한 파라미터들을 모니터링 |
+| single_joint | 단일 파트에 대한 조인트명령 |
+| stream_joint_control | 스트림 형식의 제어명령. 명령보내면 joint trajectory를 기반으로 스트림 명령후 스트림 닫음 |
+| tool_flange_test | 툴플렌지에서 확인되는 f/t센서 데이터 및 정보 모니터링 |
+| zero_pose | 로봇 zero_pose로 명령 |
+---
+
 
 ### joint control
 - 해당 예제는 일반적인 joint position 예제에 대하여 
@@ -53,25 +63,11 @@ ros2 run rby1_examples joint_control_example
 
 ## 패키지 구성 및 역할
 
-| example | explain |
+| 패키지 | 역할 |
 |---|---|
-| cancel_control | |
-| cartesian_control | |
-| cartesian_impedance |  |
-
-| joint_group| |
-| joint_impedance | |
-| multi_control |  |
-
-| multi_joint | |
-| power_control | |
-| robot_status_monitor |  |
-
-| single_joint | |
-| stream_joint_control | |
-| tool_flange_test |  |
-| zero_pose ||
-
+| `rby1_driver` | C++ 기반의 메인 드라이버 노드. RBY1 SDK를 통해 실제 로봇과 통신하며 ROS 2 인터페이스를 제공합니다. |
+| `rby1_msgs` | 로봇 제어 및 상태 확인에 필요한 커스텀 메시지, 서비스, 액션 정의를 포함합니다. |
+| `rby1_examples` | 드라이버 기능을 활용하는 파이썬 기반의 다양한 제어 예제 코드를 제공합니다. |
 ---
 
 
