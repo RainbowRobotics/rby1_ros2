@@ -92,6 +92,11 @@ sudo docker run --rm -e DISPLAY=${DISPLAY} -v /tmp/.X11-unix:/tmp/.X11-unix -p 5
 source install/setup.bash
 ros2 launch rby1_driver rby1_ros2_driver.launch.py
 ```
+- 드라이버는 아래 사진과 같이 실행됩니다.
+
+
+![드라이버 구조](Doc/img/driver.png)
+  
   
 ### Examples
 - `rby1_examples` 패키지에는 다양한 시나리오의 예제 코드가 포함되어 있습니다.
