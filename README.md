@@ -17,7 +17,20 @@ https://hub.docker.com/r/rainbowroboticsofficial/rby1-sim
 ### additional setting
 ```bash
 sudo nano ~/.bashrc
-# 내용 아래에 해당 커맨드 추가
+
+# 스크롤을 아래로 내리다보면 아래의 문구가 보임
+
+# enable programmable completion features (you don't need to enable
+# this, if it's already enabled in /etc/bash.bashrc and /etc/profile
+# sources /etc/bash.bashrc).
+if ! shopt -oq posix; then
+  if [ -f /usr/share/bash-completion/bash_completion ]; then
+    . /usr/share/bash-completion/bash_completion
+  elif [ -f /etc/bash_completion ]; then
+    . /etc/bash_completion
+  fi
+fi
+# 이 아래에 해당 커맨드 추가
 export PATH=/opt/cmake/bin:$PATH
 source /opt/ros/humble/setup.bash
 alias cb='colcon build --symlink-install'
