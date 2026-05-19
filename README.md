@@ -36,9 +36,6 @@ fi
 # 이 아래에 해당 커맨드 추가
 export PATH=/opt/cmake/bin:$PATH
 source /opt/ros/humble/setup.bash
-alias cb='colcon build --symlink-install'
-alias cbp='colcon build --symlink-install --packages-select'
-alias si='source install/setup.bash'
 
 # 종료 후 아래 명령어 사용
 source ~/.bashrc
@@ -50,7 +47,7 @@ mkdir rby1_ros2_ws/src
 cd rby1_ros2_ws/src
 git clone https://github.com/RainbowRobotics/rby1_ros2.git
 cd ..
-cb
+colcon build --symlink-install
 ```
 
 ### set driver_parameters.yaml
@@ -75,12 +72,24 @@ cb
 | `publish_torque_velocity` | `false` | 토크 및 속도 상태 토픽 활성화 여부 |
 ---
 
+### Run sim(optional)
+- 기능테스트를 해보고 싶은 경우, 로봇이 없는 경우 상위에 언급된 docker 파일 설치 이후 원하는 버전에 맞게 시뮬레이션을 실행해주시길 바랍니다.
+- 이때, 로봇의 ip는 "127.0.0.1:50051" 또는 "localhost:50051" 이니 주의하시길 바랍니다.
+- 시뮬레이션의 버전은 명령어 뒷부분 "rby1-sim:0.10.6-a_v1.2" 에서 요구에 맞게 변경하시길 바랍니다(a 또는m, v1.0~v1.3).
+- 참고로 a 모델에는 1.3 버전은 없습니다.
+```bash
+# a 모델의 1.2 버전을 사용할 경우
+sudo docker run --rm -e DISPLAY=${DISPLAY} -v /tmp/.X11-unix:/tmp/.X11-unix -p 50051:50051 rainbowroboticsofficial/rby1-sim:0.10.6-a_v1.2
+
+```
+
 ### Run driver
 - 예제들을 실행하기 전 로봇과 소통할 드라이버를 활성화해야합니다.
 - 이는 launch 파일로 실행되며, yaml파일을 읽어와 기본 설정을 진행하고 드라이버를 실행시킵니다.
+- `driver_parameters.yaml` 에서 사용자고자 하는 robot_ip 와 model 을 올바르게 작성하였는지 확인하시길 바랍니다.
 ```python
 # cd your ws
-si
+source install/setup.bash
 ros2 launch rby1_driver rby1_ros2_driver.launch.py
 ```
   
@@ -90,7 +99,7 @@ ros2 launch rby1_driver rby1_ros2_driver.launch.py
 ```bash
 # 별도의 터미널을 생성
 # cd your ws
-si
+source install/setup.bash
 ros2 run rby1_examples single_joint.py # 예시
 ```
 | example | explain |
