@@ -23,6 +23,9 @@ source /opt/ros/humble/setup.bash
 alias cb='colcon build --symlink-install'
 alias cbp='colcon build --symlink-install --packages-select'
 alias si='source install/setup.bash'
+
+# 종료 후 아래 명령어 사용
+source ~/.bashrc
 ```
 
 ### how to build
@@ -52,6 +55,15 @@ cb
 | `publish_tool_flange` | `false` | 툴 플랜지 상태 토픽 활성화 여부 |
 | `publish_torque_velocity` | `false` | 토크 및 속도 상태 토픽 활성화 여부 |
 ---
+
+### Run driver
+- 예제들을 실행하기 전 로봇과 소통할 드라이버를 활성화해야합니다.
+- 이는 launch 파일로 실행되며, yaml파일을 읽어와 기본 설정을 진행하고 드라이버를 실행시킵니다.
+```python
+# cd your ws
+si
+ros2 launch rby1_driver rby1_ros2_driver.launch.py
+```
   
 ### Examples
 `rby1_examples` 패키지에는 다양한 시나리오의 예제 코드가 포함되어 있습니다.
