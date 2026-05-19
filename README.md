@@ -63,10 +63,10 @@ cb
 | `robot_ip` | `"127.0.0.1:50051"` | 로봇 통신 IP 주소 및 포트 |
 | `model` | `"a"` | 로봇 모델 (`"a"` 또는 `"m"`) |
 | `state_topic_name` | `"joint_states"` | 상태 Publisher 및 Action Server의 기본 네임스페이스 |
-| `get_state_period` | `0.01` | 로봇 상태 Publish 주기 (초) |
-| `minimum_time` | `2.0` | 명령 수행 시 기본 최소 실행 시간 (초) |
+| `get_state_period` | `0.01` | 로봇 상태 Publish 주기 (s) |
+| `minimum_time` | `2.0` | 명령 수행 시 기본 최소 실행 시간 (s) |
 | `acceleration_limit` | `1.0` | 로봇 가속도 제한 스케일링 |
-| `collision_threshold` | `0.03` | 충돌 감지 임계값 (미터) |
+| `collision_threshold` | `0.03` | 충돌 감지 임계값 (m) |
 | `publish_power_state` | `false` | 전원 상태 토픽 활성화 여부 |
 | `publish_tool_flange` | `false` | 툴 플랜지 상태 토픽 활성화 여부 |
 | `publish_torque_velocity` | `false` | 토크 및 속도 상태 토픽 활성화 여부 |
