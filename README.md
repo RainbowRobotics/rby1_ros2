@@ -11,8 +11,33 @@
 
 ### install ros2 humble
 
+1. 일반 환경에서의 설치
+- 아래의 링크를 참조하여 설치
+  
 https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html
 
+2. Conda(Miniforge) 환경 내 설치
+- 해당 과정에서 ros2 cpp 의 빌드에 충돌이 발생할 수 있습니다.
+- 따라서 가상환경 내에서 ros2를 설치하는 것은 추천드리지 않습니다.
+```bash
+mamba create -n ros_humble python=3.10
+
+mamba activate ros_humble
+
+conda config --env --add channels conda-forge
+conda config --env --add channels robostack-staging
+conda config --env --set channel_priority strict
+
+mamba install ros-humble-desktop compilers cmake pkg-config make ninja colcon-common-extensions
+mamba install -c conda-forge gcc gxx sysroot_linux-64 cmake
+
+export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
+
+# 이후 CMakeLists.txt 수정
+set(CMAKE_PREFIX_PATH "/usr/local/lib/cmake;${CMAKE_PREFIX_PATH}")
+```
+
+3. 
 ### install rb-y1 docker
 
 https://hub.docker.com/r/rainbowroboticsofficial/rby1-sim
