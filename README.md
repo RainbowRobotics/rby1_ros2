@@ -19,10 +19,15 @@ The first implementation is intentionally state-first and conservative:
 
 ## Build
 
-Set the RBY1 SDK path before building real hardware support:
+Install the RBY1 SDK Python package before building:
 
 ```bash
-export RBY1_SDK_PATH=/path/to/rby1-sdk
+pip install rby1-sdk
+```
+
+Then build the workspace:
+
+```bash
 colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
 ```
 
