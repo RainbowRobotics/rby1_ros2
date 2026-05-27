@@ -13,6 +13,7 @@
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
+  <depend>eigen</depend>
 
   <exec_depend>python3-rby1-sdk</exec_depend>
 

@@ -23,7 +23,6 @@ ament_target_dependencies(rby1_robot_manager_node
   rclcpp
   sensor_msgs
 )
-target_link_libraries(rby1_robot_manager_node rby1_robot_client)
 
 install(
   TARGETS rby1_robot_manager_node

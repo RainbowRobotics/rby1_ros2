@@ -89,7 +89,7 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument("model", default_value="a", description="RBY1 model: a or m"),
-            DeclareLaunchArgument("robot_ip", default_value="127.0.0.1:50051"),
+            DeclareLaunchArgument("robot_ip", default_value="192.168.30.1:50051"),
             DeclareLaunchArgument("robot_namespace", default_value="rby1"),
             DeclareLaunchArgument("use_mock_hardware", default_value="false"),
             DeclareLaunchArgument("auto_reconnect", default_value="true"),

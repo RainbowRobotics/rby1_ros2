@@ -92,7 +92,6 @@ hardware_interface::CallbackReturn Rby1SystemInterface::on_configure(
 {
   (void)previous_state;
   try {
-    options_.model = normalize_model_name(options_.model);
     robot_client_ = std::make_unique<Rby1RobotClient>(options_);
     robot_client_->connect();
     const auto snapshot = robot_client_->read_state();
@@ -141,6 +140,35 @@ hardware_interface::CallbackReturn Rby1SystemInterface::on_deactivate(
   active_ = false;
   RCLCPP_INFO(logger_, "Deactivated RBY1 hardware interface");
   return hardware_interface::CallbackReturn::SUCCESS;
+}
+
+hardware_interface::CallbackReturn Rby1SystemInterface::on_cleanup(
+  const rclcpp_lifecycle::State & previous_state)
+{
+  (void)previous_state;
+  active_ = false;
+  read_error_count_ = 0;
+  if (robot_client_) {
+    try {
+      robot_client_->disconnect();
+    } catch (const std::exception & exception) {
+      RCLCPP_WARN(
+        logger_, "Exception while disconnecting RBY1 client during cleanup: %s",
+        exception.what());
+    }
+    robot_client_.reset();
+  }
+  std::fill(positions_.begin(), positions_.end(), std::numeric_limits<double>::quiet_NaN());
+  std::fill(velocities_.begin(), velocities_.end(), 0.0);
+  std::fill(efforts_.begin(), efforts_.end(), 0.0);
+  RCLCPP_INFO(logger_, "Cleaned up RBY1 hardware interface");
+  return hardware_interface::CallbackReturn::SUCCESS;
+}
+
+hardware_interface::CallbackReturn Rby1SystemInterface::on_shutdown(
+  const rclcpp_lifecycle::State & previous_state)
+{
+  return on_cleanup(previous_state);
 }
 
 std::vector<hardware_interface::StateInterface> Rby1SystemInterface::export_state_interfaces()

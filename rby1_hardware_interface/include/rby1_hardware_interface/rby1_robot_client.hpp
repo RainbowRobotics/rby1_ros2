@@ -86,6 +86,8 @@ enum class ControlManagerCommand
   kResetFault
 };
 
+// All public methods of Rby1RobotClient are thread-safe: the underlying
+// implementation serializes RBY1 SDK access with an internal mutex.
 class Rby1RobotClient
 {
 public:
@@ -113,6 +115,8 @@ public:
 
 private:
   class ImplBase;
+  template <typename ModelType>
+  friend class Rby1RobotClientImpl;
 
   RobotClientOptions options_;
   std::unique_ptr<ImplBase> impl_;

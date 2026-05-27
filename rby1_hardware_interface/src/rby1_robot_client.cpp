@@ -123,14 +123,25 @@ public:
   void connect() override
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    robot_ = rb::Robot<ModelType>::Create(options_.robot_ip);
-    if (!robot_ || !robot_->Connect()) {
+    try {
+      robot_ = rb::Robot<ModelType>::Create(options_.robot_ip);
+      if (!robot_ || !robot_->Connect()) {
+        robot_.reset();
+        connected_ = false;
+        throw std::runtime_error("failed to connect to RBY1 robot at " + options_.robot_ip);
+      }
+      info_ = robot_->GetRobotInfo();
+      connected_ = true;
+    } catch (const std::exception &) {
       robot_.reset();
       connected_ = false;
-      throw std::runtime_error("failed to connect to RBY1 robot at " + options_.robot_ip);
+      throw;
+    } catch (...) {
+      robot_.reset();
+      connected_ = false;
+      throw std::runtime_error(
+        "RBY1 SDK threw a non-standard exception while connecting to " + options_.robot_ip);
     }
-    info_ = robot_->GetRobotInfo();
-    connected_ = true;
   }
 
   void disconnect() noexcept override
@@ -240,8 +251,16 @@ public:
     }
     const bool right_success = robot_->SetToolFlangeOutputVoltage("right", voltage);
     const bool left_success = robot_->SetToolFlangeOutputVoltage("left", voltage);
-    const bool success = right_success && left_success;
-    return result(success, success ? "tool flange voltage command succeeded" : "tool flange voltage command failed");
+    if (right_success && left_success) {
+      return result(true, "tool flange voltage command succeeded");
+    }
+    std::string failed;
+    if (!right_success) failed += "right";
+    if (!left_success) {
+      if (!failed.empty()) failed += ", ";
+      failed += "left";
+    }
+    return result(false, "tool flange voltage command failed for: " + failed);
   }
 
   CommandResult set_gravity_compensation(const std::string & part_name, bool enabled) override

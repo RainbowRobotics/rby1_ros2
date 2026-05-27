@@ -177,22 +177,40 @@ public:
 
     robot_power_service_ = create_service<rby1_msgs::srv::StateOnOff>(
       "robot_power",
-      [this](const auto request, auto response) { handle_power(request, response); });
+      [this](const std::shared_ptr<rby1_msgs::srv::StateOnOff::Request> request,
+             std::shared_ptr<rby1_msgs::srv::StateOnOff::Response> response) {
+        handle_power(request, response);
+      });
     robot_servo_service_ = create_service<rby1_msgs::srv::StateOnOff>(
       "robot_servo",
-      [this](const auto request, auto response) { handle_servo(request, response); });
+      [this](const std::shared_ptr<rby1_msgs::srv::StateOnOff::Request> request,
+             std::shared_ptr<rby1_msgs::srv::StateOnOff::Response> response) {
+        handle_servo(request, response);
+      });
     motor_brake_service_ = create_service<rby1_msgs::srv::StateOnOff>(
       "set_motor_brake",
-      [this](const auto request, auto response) { handle_brake(request, response); });
+      [this](const std::shared_ptr<rby1_msgs::srv::StateOnOff::Request> request,
+             std::shared_ptr<rby1_msgs::srv::StateOnOff::Response> response) {
+        handle_brake(request, response);
+      });
     tool_flange_service_ = create_service<rby1_msgs::srv::StateOnOff>(
       "tool_flange_power",
-      [this](const auto request, auto response) { handle_tool_flange(request, response); });
+      [this](const std::shared_ptr<rby1_msgs::srv::StateOnOff::Request> request,
+             std::shared_ptr<rby1_msgs::srv::StateOnOff::Response> response) {
+        handle_tool_flange(request, response);
+      });
     gravity_compensation_service_ = create_service<rby1_msgs::srv::GravityCompensation>(
       "gravity_compensation",
-      [this](const auto request, auto response) { handle_gravity_compensation(request, response); });
+      [this](const std::shared_ptr<rby1_msgs::srv::GravityCompensation::Request> request,
+             std::shared_ptr<rby1_msgs::srv::GravityCompensation::Response> response) {
+        handle_gravity_compensation(request, response);
+      });
     control_manager_service_ = create_service<rby1_msgs::srv::ControlManagerCommand>(
       "control_manager_command",
-      [this](const auto request, auto response) { handle_control_manager(request, response); });
+      [this](const std::shared_ptr<rby1_msgs::srv::ControlManagerCommand::Request> request,
+             std::shared_ptr<rby1_msgs::srv::ControlManagerCommand::Response> response) {
+        handle_control_manager(request, response);
+      });
 
     if (publish_status_) {
       const auto period = std::chrono::duration<double>(std::max(0.005, read_period_sec));
