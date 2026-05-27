@@ -1,0 +1,8 @@
+<library path="rby1_system_interface">
+  <class
+    name="rby1_hardware_interface/Rby1SystemInterface"
+    type="rby1_hardware_interface::Rby1SystemInterface"
+    base_class_type="hardware_interface::SystemInterface">
+    <description>State-only ros2_control SystemInterface for RBY1 robots.</description>
+  </class>
+</library>

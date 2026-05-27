@@ -1,0 +1,7 @@
+bool state
+
+# Optional target selector. Examples: all, torso, right_arm, left_arm, head, 12, 24, right_arm_1.
+string parameters
+---
+bool success
+string message

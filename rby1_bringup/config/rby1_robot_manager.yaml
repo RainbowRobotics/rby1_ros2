@@ -1,0 +1,12 @@
+rby1_robot_manager:
+  ros__parameters:
+    robot_ip: "127.0.0.1:50051"
+    model: "a"
+    auto_reconnect: true
+    connect_on_start: true
+    connect_timeout_sec: 3.0
+    read_timeout_sec: 0.5
+    status_period_sec: 0.02
+    publish_status: true
+    publish_battery_state: true
+    publish_tool_flange_state: true

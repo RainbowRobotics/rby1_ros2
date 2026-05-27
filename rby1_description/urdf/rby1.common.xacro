@@ -1,0 +1,114 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <material name="rby1_dark">
+    <color rgba="0.08 0.09 0.10 1.0"/>
+  </material>
+  <material name="rby1_light">
+    <color rgba="0.72 0.74 0.76 1.0"/>
+  </material>
+
+  <xacro:macro name="simple_box_link" params="name size color">
+    <link name="${name}">
+      <visual>
+        <geometry>
+          <box size="${size}"/>
+        </geometry>
+        <material name="${color}"/>
+      </visual>
+      <collision>
+        <geometry>
+          <box size="${size}"/>
+        </geometry>
+      </collision>
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="revolute_joint" params="name parent child xyz axis lower upper">
+    <joint name="${name}" type="revolute">
+      <parent link="${parent}"/>
+      <child link="${child}"/>
+      <origin xyz="${xyz}" rpy="0 0 0"/>
+      <axis xyz="${axis}"/>
+      <limit lower="${lower}" upper="${upper}" effort="180.0" velocity="4.8"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="continuous_joint" params="name parent child xyz axis">
+    <joint name="${name}" type="continuous">
+      <parent link="${parent}"/>
+      <child link="${child}"/>
+      <origin xyz="${xyz}" rpy="0 0 0"/>
+      <axis xyz="${axis}"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="rby1_upper_body">
+    <xacro:simple_box_link name="base_link" size="0.72 0.52 0.18" color="rby1_dark"/>
+    <xacro:simple_box_link name="torso_link_0" size="0.24 0.20 0.16" color="rby1_light"/>
+    <xacro:simple_box_link name="torso_link_1" size="0.24 0.20 0.16" color="rby1_light"/>
+    <xacro:simple_box_link name="torso_link_2" size="0.24 0.20 0.16" color="rby1_light"/>
+    <xacro:simple_box_link name="torso_link_3" size="0.24 0.20 0.16" color="rby1_light"/>
+    <xacro:simple_box_link name="torso_link_4" size="0.24 0.20 0.16" color="rby1_light"/>
+    <xacro:simple_box_link name="torso_link_5" size="0.32 0.22 0.20" color="rby1_light"/>
+    <xacro:simple_box_link name="right_arm_link_0" size="0.10 0.10 0.24" color="rby1_dark"/>
+    <xacro:simple_box_link name="right_arm_link_1" size="0.10 0.10 0.24" color="rby1_dark"/>
+    <xacro:simple_box_link name="right_arm_link_2" size="0.10 0.10 0.24" color="rby1_dark"/>
+    <xacro:simple_box_link name="right_arm_link_3" size="0.10 0.10 0.24" color="rby1_dark"/>
+    <xacro:simple_box_link name="right_arm_link_4" size="0.10 0.10 0.20" color="rby1_dark"/>
+    <xacro:simple_box_link name="right_arm_link_5" size="0.10 0.10 0.18" color="rby1_dark"/>
+    <xacro:simple_box_link name="right_arm_link_6" size="0.10 0.10 0.14" color="rby1_dark"/>
+    <xacro:simple_box_link name="left_arm_link_0" size="0.10 0.10 0.24" color="rby1_dark"/>
+    <xacro:simple_box_link name="left_arm_link_1" size="0.10 0.10 0.24" color="rby1_dark"/>
+    <xacro:simple_box_link name="left_arm_link_2" size="0.10 0.10 0.24" color="rby1_dark"/>
+    <xacro:simple_box_link name="left_arm_link_3" size="0.10 0.10 0.24" color="rby1_dark"/>
+    <xacro:simple_box_link name="left_arm_link_4" size="0.10 0.10 0.20" color="rby1_dark"/>
+    <xacro:simple_box_link name="left_arm_link_5" size="0.10 0.10 0.18" color="rby1_dark"/>
+    <xacro:simple_box_link name="left_arm_link_6" size="0.10 0.10 0.14" color="rby1_dark"/>
+    <xacro:simple_box_link name="head_link_0" size="0.16 0.14 0.12" color="rby1_light"/>
+    <xacro:simple_box_link name="head_link_1" size="0.18 0.12 0.10" color="rby1_light"/>
+
+    <xacro:revolute_joint name="torso_0" parent="base_link" child="torso_link_0" xyz="0 0 0.20" axis="0 0 1" lower="-3.14159" upper="3.14159"/>
+    <xacro:revolute_joint name="torso_1" parent="torso_link_0" child="torso_link_1" xyz="0 0 0.16" axis="0 1 0" lower="-1.5708" upper="1.5708"/>
+    <xacro:revolute_joint name="torso_2" parent="torso_link_1" child="torso_link_2" xyz="0 0 0.16" axis="0 1 0" lower="-1.5708" upper="1.5708"/>
+    <xacro:revolute_joint name="torso_3" parent="torso_link_2" child="torso_link_3" xyz="0 0 0.16" axis="1 0 0" lower="-3.14159" upper="3.14159"/>
+    <xacro:revolute_joint name="torso_4" parent="torso_link_3" child="torso_link_4" xyz="0 0 0.16" axis="0 1 0" lower="-1.5708" upper="1.5708"/>
+    <xacro:revolute_joint name="torso_5" parent="torso_link_4" child="torso_link_5" xyz="0 0 0.16" axis="0 0 1" lower="-3.14159" upper="3.14159"/>
+
+    <xacro:revolute_joint name="right_arm_0" parent="torso_link_5" child="right_arm_link_0" xyz="0 -0.24 0.08" axis="0 0 1" lower="-3.14159" upper="3.14159"/>
+    <xacro:revolute_joint name="right_arm_1" parent="right_arm_link_0" child="right_arm_link_1" xyz="0 0 -0.18" axis="0 1 0" lower="-2.967" upper="2.967"/>
+    <xacro:revolute_joint name="right_arm_2" parent="right_arm_link_1" child="right_arm_link_2" xyz="0 0 -0.18" axis="0 0 1" lower="-3.14159" upper="3.14159"/>
+    <xacro:revolute_joint name="right_arm_3" parent="right_arm_link_2" child="right_arm_link_3" xyz="0 0 -0.18" axis="0 1 0" lower="-2.967" upper="2.967"/>
+    <xacro:revolute_joint name="right_arm_4" parent="right_arm_link_3" child="right_arm_link_4" xyz="0 0 -0.16" axis="0 0 1" lower="-3.14159" upper="3.14159"/>
+    <xacro:revolute_joint name="right_arm_5" parent="right_arm_link_4" child="right_arm_link_5" xyz="0 0 -0.14" axis="0 1 0" lower="-2.967" upper="2.967"/>
+    <xacro:revolute_joint name="right_arm_6" parent="right_arm_link_5" child="right_arm_link_6" xyz="0 0 -0.12" axis="0 0 1" lower="-3.14159" upper="3.14159"/>
+
+    <xacro:revolute_joint name="left_arm_0" parent="torso_link_5" child="left_arm_link_0" xyz="0 0.24 0.08" axis="0 0 1" lower="-3.14159" upper="3.14159"/>
+    <xacro:revolute_joint name="left_arm_1" parent="left_arm_link_0" child="left_arm_link_1" xyz="0 0 -0.18" axis="0 1 0" lower="-2.967" upper="2.967"/>
+    <xacro:revolute_joint name="left_arm_2" parent="left_arm_link_1" child="left_arm_link_2" xyz="0 0 -0.18" axis="0 0 1" lower="-3.14159" upper="3.14159"/>
+    <xacro:revolute_joint name="left_arm_3" parent="left_arm_link_2" child="left_arm_link_3" xyz="0 0 -0.18" axis="0 1 0" lower="-2.967" upper="2.967"/>
+    <xacro:revolute_joint name="left_arm_4" parent="left_arm_link_3" child="left_arm_link_4" xyz="0 0 -0.16" axis="0 0 1" lower="-3.14159" upper="3.14159"/>
+    <xacro:revolute_joint name="left_arm_5" parent="left_arm_link_4" child="left_arm_link_5" xyz="0 0 -0.14" axis="0 1 0" lower="-2.967" upper="2.967"/>
+    <xacro:revolute_joint name="left_arm_6" parent="left_arm_link_5" child="left_arm_link_6" xyz="0 0 -0.12" axis="0 0 1" lower="-3.14159" upper="3.14159"/>
+
+    <xacro:revolute_joint name="head_0" parent="torso_link_5" child="head_link_0" xyz="0 0 0.20" axis="0 0 1" lower="-1.5708" upper="1.5708"/>
+    <xacro:revolute_joint name="head_1" parent="head_link_0" child="head_link_1" xyz="0 0 0.10" axis="0 1 0" lower="-0.7854" upper="0.7854"/>
+  </xacro:macro>
+
+  <xacro:macro name="rby1a_mobility">
+    <xacro:simple_box_link name="right_wheel_link" size="0.08 0.08 0.08" color="rby1_dark"/>
+    <xacro:simple_box_link name="left_wheel_link" size="0.08 0.08 0.08" color="rby1_dark"/>
+    <xacro:continuous_joint name="right_wheel" parent="base_link" child="right_wheel_link" xyz="0 -0.34 -0.02" axis="0 1 0"/>
+    <xacro:continuous_joint name="left_wheel" parent="base_link" child="left_wheel_link" xyz="0 0.34 -0.02" axis="0 1 0"/>
+  </xacro:macro>
+
+  <xacro:macro name="rby1m_mobility">
+    <xacro:simple_box_link name="wheel_fr_link" size="0.08 0.08 0.08" color="rby1_dark"/>
+    <xacro:simple_box_link name="wheel_fl_link" size="0.08 0.08 0.08" color="rby1_dark"/>
+    <xacro:simple_box_link name="wheel_rr_link" size="0.08 0.08 0.08" color="rby1_dark"/>
+    <xacro:simple_box_link name="wheel_rl_link" size="0.08 0.08 0.08" color="rby1_dark"/>
+    <xacro:continuous_joint name="wheel_fr" parent="base_link" child="wheel_fr_link" xyz="0.26 -0.30 -0.02" axis="0 1 0"/>
+    <xacro:continuous_joint name="wheel_fl" parent="base_link" child="wheel_fl_link" xyz="0.26 0.30 -0.02" axis="0 1 0"/>
+    <xacro:continuous_joint name="wheel_rr" parent="base_link" child="wheel_rr_link" xyz="-0.26 -0.30 -0.02" axis="0 1 0"/>
+    <xacro:continuous_joint name="wheel_rl" parent="base_link" child="wheel_rl_link" xyz="-0.26 0.30 -0.02" axis="0 1 0"/>
+  </xacro:macro>
+</robot>

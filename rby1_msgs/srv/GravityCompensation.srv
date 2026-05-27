@@ -1,0 +1,6 @@
+# Valid part names are torso, right_arm, and left_arm.
+string part_name
+bool state
+---
+bool success
+string message
