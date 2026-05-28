@@ -105,4 +105,35 @@
       <xacro:rby1_state_interfaces joint_name="wheel_rl"/>
     </ros2_control>
   </xacro:macro>
+
+  <xacro:macro name="rby1ub_ros2_control" params="robot_ip use_mock_hardware auto_reconnect read_timeout_sec connect_timeout_sec">
+    <ros2_control name="RBY1System" type="system">
+      <xacro:rby1_hardware_block
+        robot_ip="${robot_ip}"
+        model="ub"
+        use_mock_hardware="${use_mock_hardware}"
+        auto_reconnect="${auto_reconnect}"
+        read_timeout_sec="${read_timeout_sec}"
+        connect_timeout_sec="${connect_timeout_sec}"/>
+
+      <xacro:rby1_state_interfaces joint_name="torso_hp"/>
+      <xacro:rby1_state_interfaces joint_name="torso_5"/>
+      <xacro:rby1_state_interfaces joint_name="right_arm_0"/>
+      <xacro:rby1_state_interfaces joint_name="right_arm_1"/>
+      <xacro:rby1_state_interfaces joint_name="right_arm_2"/>
+      <xacro:rby1_state_interfaces joint_name="right_arm_3"/>
+      <xacro:rby1_state_interfaces joint_name="right_arm_4"/>
+      <xacro:rby1_state_interfaces joint_name="right_arm_5"/>
+      <xacro:rby1_state_interfaces joint_name="right_arm_6"/>
+      <xacro:rby1_state_interfaces joint_name="left_arm_0"/>
+      <xacro:rby1_state_interfaces joint_name="left_arm_1"/>
+      <xacro:rby1_state_interfaces joint_name="left_arm_2"/>
+      <xacro:rby1_state_interfaces joint_name="left_arm_3"/>
+      <xacro:rby1_state_interfaces joint_name="left_arm_4"/>
+      <xacro:rby1_state_interfaces joint_name="left_arm_5"/>
+      <xacro:rby1_state_interfaces joint_name="left_arm_6"/>
+      <xacro:rby1_state_interfaces joint_name="head_0"/>
+      <xacro:rby1_state_interfaces joint_name="head_1"/>
+    </ros2_control>
+  </xacro:macro>
 </robot>

@@ -7,21 +7,23 @@ from launch_ros.substitutions import FindPackageShare
 
 def launch_setup(context, *args, **kwargs):
     model = LaunchConfiguration("model").perform(context).lower()
-    if model not in ("a", "m"):
-        raise RuntimeError("model must be 'a' or 'm'")
+    if model not in ("a", "m", "ub"):
+        raise RuntimeError("model must be 'a', 'm', or 'ub'")
+    version = LaunchConfiguration("version").perform(context)
 
     robot_description_file = PathJoinSubstitution(
         [FindPackageShare("rby1_description"), "urdf", f"rby1{model}.urdf.xacro"]
     )
-    robot_description = Command(
-        [
-            "xacro ",
-            robot_description_file,
-            " robot_ip:=",
-            LaunchConfiguration("robot_ip"),
-            " use_mock_hardware:=true",
-        ]
-    )
+    xacro_cmd = [
+        "xacro ",
+        robot_description_file,
+        " robot_ip:=",
+        LaunchConfiguration("robot_ip"),
+        " use_mock_hardware:=true",
+    ]
+    if model != "ub":
+        xacro_cmd += [" version:=", version]
+    robot_description = Command(xacro_cmd)
 
     return [
         Node(
@@ -36,7 +38,12 @@ def launch_setup(context, *args, **kwargs):
 def generate_launch_description():
     return LaunchDescription(
         [
-            DeclareLaunchArgument("model", default_value="a", description="RBY1 model: a or m"),
+            DeclareLaunchArgument("model", default_value="a", description="RBY1 model: a, m, or ub"),
+            DeclareLaunchArgument(
+                "version",
+                default_value="1.2",
+                description="Model version (a: 1.0/1.1/1.2; m: 1.0/1.1/1.2/1.3; ignored for ub)",
+            ),
             DeclareLaunchArgument("robot_ip", default_value="127.0.0.1:50051"),
             OpaqueFunction(function=launch_setup),
         ]

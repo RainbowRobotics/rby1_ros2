@@ -1,16 +1,20 @@
 <?xml version="1.0"?>
 <robot name="rby1a" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!--
+    Top-level wrapper for the RBY1-A platform.
+    Supported versions: 1.0, 1.1, 1.2 (default).
+    Vendored from rby1-sdk/models/rby1a/urdf/model_v<version>.urdf.
+  -->
+  <xacro:arg name="version" default="1.2"/>
   <xacro:arg name="robot_ip" default="127.0.0.1:50051"/>
   <xacro:arg name="use_mock_hardware" default="false"/>
   <xacro:arg name="auto_reconnect" default="true"/>
   <xacro:arg name="read_timeout_sec" default="0.5"/>
   <xacro:arg name="connect_timeout_sec" default="3.0"/>
 
-  <xacro:include filename="$(find rby1_description)/urdf/rby1.common.xacro"/>
+  <xacro:include filename="$(find rby1_description)/urdf/rby1a/v$(arg version)/model.xacro"/>
   <xacro:include filename="$(find rby1_description)/urdf/rby1.ros2_control.xacro"/>
 
-  <xacro:rby1a_mobility model="rby1a"/>
-  <xacro:rby1_upper_body model="rby1a" torso_0_xyz="0 0 0.2805"/>
   <xacro:rby1a_ros2_control
     robot_ip="$(arg robot_ip)"
     use_mock_hardware="$(arg use_mock_hardware)"

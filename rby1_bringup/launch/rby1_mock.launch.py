@@ -8,7 +8,12 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     return LaunchDescription(
         [
-            DeclareLaunchArgument("model", default_value="a", description="RBY1 model: a or m"),
+            DeclareLaunchArgument("model", default_value="a", description="RBY1 model: a, m, or ub"),
+            DeclareLaunchArgument(
+                "version",
+                default_value="1.2",
+                description="Model version (ignored for ub)",
+            ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     PathJoinSubstitution(
@@ -17,6 +22,7 @@ def generate_launch_description():
                 ),
                 launch_arguments={
                     "model": LaunchConfiguration("model"),
+                    "version": LaunchConfiguration("version"),
                     "use_mock_hardware": "true",
                     "launch_robot_manager": "false",
                     "publish_status": "false",

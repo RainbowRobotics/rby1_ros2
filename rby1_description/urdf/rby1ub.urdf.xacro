@@ -1,21 +1,19 @@
 <?xml version="1.0"?>
-<robot name="rby1m" xmlns:xacro="http://www.ros.org/wiki/xacro">
+<robot name="rby1ub" xmlns:xacro="http://www.ros.org/wiki/xacro">
   <!--
-    Top-level wrapper for the RBY1-M platform.
-    Supported versions: 1.0, 1.1, 1.2 (default), 1.3 (WY/WP/WR wrist).
-    Vendored from rby1-sdk/models/rby1m/urdf/model_v<version>.urdf.
+    Top-level wrapper for the RBY1 upper-body (UB) platform.
+    Single variant; vendored from rby1-sdk/models/rby1ub/urdf/model.urdf.
   -->
-  <xacro:arg name="version" default="1.2"/>
   <xacro:arg name="robot_ip" default="127.0.0.1:50051"/>
-  <xacro:arg name="use_mock_hardware" default="false"/>
+  <xacro:arg name="use_mock_hardware" default="true"/>
   <xacro:arg name="auto_reconnect" default="true"/>
   <xacro:arg name="read_timeout_sec" default="0.5"/>
   <xacro:arg name="connect_timeout_sec" default="3.0"/>
 
-  <xacro:include filename="$(find rby1_description)/urdf/rby1m/v$(arg version)/model.xacro"/>
+  <xacro:include filename="$(find rby1_description)/urdf/rby1ub/model.xacro"/>
   <xacro:include filename="$(find rby1_description)/urdf/rby1.ros2_control.xacro"/>
 
-  <xacro:rby1m_ros2_control
+  <xacro:rby1ub_ros2_control
     robot_ip="$(arg robot_ip)"
     use_mock_hardware="$(arg use_mock_hardware)"
     auto_reconnect="$(arg auto_reconnect)"
