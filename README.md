@@ -42,14 +42,26 @@ source install/setup.bash
 Use mock hardware to validate the ROS graph without connecting to a robot:
 
 ```bash
-ros2 launch rby1_bringup rby1_mock.launch.py model:=a
+ros2 launch rby1_bringup rby1_mock.launch.py
 ```
+
+In mock mode `model:=auto` (default) resolves to `a` and `version:=auto`
+resolves to `1.2`. Override either explicitly, e.g. `model:=m version:=1.3`.
 
 ## Real Hardware Read-Only Bringup
 
 ```bash
-ros2 launch rby1_bringup rby1_control.launch.py robot_ip:=192.168.0.10:50051 model:=a
+ros2 launch rby1_bringup rby1_control.launch.py robot_ip:=192.168.0.10:50051
 ```
+
+Both `model` and `version` default to `auto`. On launch, the bringup connects
+to the robot via `rby1-sdk` and reads `RobotInfo.robot_model_name` /
+`robot_model_version` to select the URDF (RBY1-A / RBY1-M / RBY1-UB) and the
+correct version sub-directory. Pass `model:=a|m|ub` or `version:=1.0` (etc.)
+to skip auto-detection for that field. If the probed version is not in the
+supported set (`a: 1.0/1.1/1.2`, `m: 1.0/1.1/1.2/1.3`), the bringup logs a
+warning and falls back to `1.2`. If the probe itself fails (network
+unreachable, SDK missing, unknown model), the launch aborts with an error.
 
 The hardware interface only reads state in this version. Power, servo, brake, and control-manager changes are explicit service calls through `rby1_robot_manager`.
 

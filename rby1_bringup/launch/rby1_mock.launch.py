@@ -8,11 +8,15 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     return LaunchDescription(
         [
-            DeclareLaunchArgument("model", default_value="a", description="RBY1 model: a, m, or ub"),
+            DeclareLaunchArgument(
+                "model",
+                default_value="auto",
+                description="RBY1 model: 'a', 'm', 'ub', or 'auto' (mock mode treats 'auto' as 'a')",
+            ),
             DeclareLaunchArgument(
                 "version",
-                default_value="1.2",
-                description="Model version (ignored for ub)",
+                default_value="auto",
+                description="Model version (mock mode treats 'auto' as default 1.2; ignored for ub)",
             ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
