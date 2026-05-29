@@ -4,6 +4,7 @@
 #include <chrono>
 #include <thread>
 #include <optional>
+#include <atomic>
 #include <fstream>
 //ros2
 #include "rclcpp/rclcpp.hpp"
@@ -32,6 +33,7 @@
 #include "trajectory_msgs/msg/joint_trajectory.hpp"
 //local header file
 #include "type.hpp"
+#include <Eigen/Dense>
 
 using namespace std::placeholders;
 namespace rby1_ros2{
@@ -49,6 +51,13 @@ namespace rby1_ros2{
             std::shared_ptr<rb::Robot<ModelType>> robot_;
             std::shared_ptr<rb::dyn::Robot<ModelType::kRobotDOF>> dynamics_;
             std::shared_ptr<rb::dyn::State<ModelType::kRobotDOF>> dyn_state_;
+
+            // Cached physical joint limits
+            Eigen::VectorXd q_lower_;
+            Eigen::VectorXd q_upper_;
+            Eigen::VectorXd qdot_upper_;
+            Eigen::VectorXd qddot_upper_;
+            std::vector<std::string> dyn_joint_names_;
 
             std::string address;
             std::string model;
@@ -70,6 +79,7 @@ namespace rby1_ros2{
 
             //utility
             std::mutex mutex_;
+            std::mutex stream_mutex_;
 
             //ros2
             rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr torso_pub_;
@@ -86,6 +96,11 @@ namespace rby1_ros2{
             rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
             bool stream_active_{false};
             bool collision_enable_{false};
+
+            std::atomic<bool> active_torso_{false};
+            std::atomic<bool> active_left_arm_{false};
+            std::atomic<bool> active_right_arm_{false};
+            std::atomic<bool> active_head_{false};
 
             // Timer for 100Hz publishing
             rclcpp::TimerBase::SharedPtr joint_state_timer_;

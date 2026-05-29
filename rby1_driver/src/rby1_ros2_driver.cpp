@@ -37,6 +37,22 @@ namespace rby1_ros2{
                             dynamics_->GetJointNames()
                         );
                         RCLCPP_INFO(this->get_logger(), "DynState created.");
+
+                        q_lower_ = dynamics_->GetLimitQLower(dyn_state_);
+                        q_upper_ = dynamics_->GetLimitQUpper(dyn_state_);
+                        qdot_upper_ = dynamics_->GetLimitQdotUpper(dyn_state_);
+                        qddot_upper_ = dynamics_->GetLimitQddotUpper(dyn_state_);
+                        auto joint_names = dyn_state_->GetJointNames();
+                        dyn_joint_names_.clear();
+                        for (size_t i = 0; i < joint_names.size(); ++i) {
+                            dyn_joint_names_.push_back(std::string(joint_names[i]));
+                        }
+                        
+                        RCLCPP_INFO(this->get_logger(), "=== ROBOT JOINT PHYSICAL LIMITS ===");
+                        for (size_t i = 0; i < dyn_joint_names_.size(); ++i) {
+                            RCLCPP_INFO(this->get_logger(), "Joint [%zu] %s: Pos=[%.3f, %.3f] rad, Vel_Max=%.3f rad/s, Accel_Max=%.3f rad/s^2",
+                                        i, dyn_joint_names_[i].c_str(), q_lower_[i], q_upper_[i], qdot_upper_[i], qddot_upper_[i]);
+                        }
                     } catch (const std::exception& e) {
                         RCLCPP_WARN(this->get_logger(), "\033[1;33m[DYNAMICS WARNING] Failed to load dynamics model: %s. Cartesian poses and impedance features will be disabled.\033[0m", e.what());
                     }
@@ -803,11 +819,48 @@ namespace rby1_ros2{
             }
         }
 
+        if (dynamics_ && dyn_state_ && q_lower_.size() > 0) {
+            for (size_t i = 0; i < trajectory.points.size(); ++i) {
+                const auto& point = trajectory.points[i];
+                for (size_t j = 0; j < joint_mapping.size(); ++j) {
+                    if (joint_mapping[j] != -1 && j < point.positions.size()) {
+                        double pos = point.positions[j];
+                        std::string joint_name = info_.joint_infos[joint_mapping[j]].name;
+
+                        int pinocchio_idx = -1;
+                        for (size_t k = 0; k < dyn_joint_names_.size(); ++k) {
+                            if (dyn_joint_names_[k] == joint_name) {
+                                pinocchio_idx = k;
+                                break;
+                            }
+                        }
+                        if (pinocchio_idx == -1) continue;
+
+                        double min_p = q_lower_[pinocchio_idx];
+                        double max_p = q_upper_[pinocchio_idx];
+
+                        if (pos < min_p || pos > max_p) {
+                            RCLCPP_ERROR(this->get_logger(), 
+                                         "\033[1;31m[SAFETY ERROR] StreamPosition trajectory point %lu violates limit: "
+                                         "joint '%s' position %.3f out of range [%.3f, %.3f] rad.\033[0m",
+                                         i, joint_name.c_str(), pos, min_p, max_p);
+                            result->success = false;
+                            result->finish_code = "Safety Limit Exceeded: Commanded position for joint '" + joint_name + 
+                                                  "' (" + std::to_string(pos) + " rad) is out of safety range [" + 
+                                                  std::to_string(min_p) + ", " + std::to_string(max_p) + "] rad.";
+                            try { goal_handle->abort(result); } catch (...) {}
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
         if (!stream_active_ || !stream_handler_) {
             RCLCPP_ERROR(this->get_logger(), "Trajectory stream command rejected: stream is not active. Call /stream_control service first.");
             result->success = false;
             result->finish_code = "kRejected";
-            goal_handle->abort(result);
+            try { goal_handle->abort(result); } catch (...) {}
             return;
         }
 
@@ -824,7 +877,7 @@ namespace rby1_ros2{
                 if (goal_handle->is_canceling()) {
                     result->success = false;
                     result->finish_code = "kCanceled";
-                    goal_handle->canceled(result);
+                    try { goal_handle->canceled(result); } catch (...) {}
                     return;
                 }
 
@@ -876,13 +929,17 @@ namespace rby1_ros2{
                 comp_builder.SetBodyCommand(rb::BodyCommandBuilder(std::move(body_comp_builder)));
                 comp_builder.SetHeadCommand(head_builder);
 
-                auto feedback = stream_handler_->SendCommand(
-                    rb::RobotCommandBuilder().SetCommand(comp_builder)
-                );
+                rb::RobotCommandFeedback feedback;
+                {
+                    std::lock_guard<std::mutex> lock(stream_mutex_);
+                    feedback = stream_handler_->SendCommand(
+                        rb::RobotCommandBuilder().SetCommand(comp_builder)
+                    );
+                }
 
                 auto action_feedback = std::make_shared<StreamPosition::Feedback>();
                 action_feedback->current_state = "streaming point " + std::to_string(i + 1) + "/" + std::to_string(trajectory.points.size());
-                goal_handle->publish_feedback(action_feedback);
+                try { goal_handle->publish_feedback(action_feedback); } catch (...) {}
 
                 // Wait for the duration of the point before sending the next one
                 // to match the requested trajectory timing.
@@ -893,7 +950,7 @@ namespace rby1_ros2{
             RCLCPP_ERROR(this->get_logger(), "Error during stream transmission: %s", e.what());
             result->success = false;
             result->finish_code = "kError";
-            goal_handle->abort(result);
+            try { goal_handle->abort(result); } catch (...) {}
             return;
         }
 
@@ -909,7 +966,7 @@ namespace rby1_ros2{
                 RCLCPP_ERROR(this->get_logger(), "Timeout waiting for stream completion (%u ms).", wait_ms);
                 result->success = false;
                 result->finish_code = "kTimeout";
-                goal_handle->abort(result);
+                try { goal_handle->abort(result); } catch (...) {}
                 this->check_controll_manager();
                 return;
             }
@@ -918,14 +975,14 @@ namespace rby1_ros2{
             RCLCPP_ERROR(this->get_logger(), "Error during stream wait: %s", e.what());
             result->success = false;
             result->finish_code = "kError";
-            goal_handle->abort(result);
+            try { goal_handle->abort(result); } catch (...) {}
             this->check_controll_manager();
             return;
         }
 
         result->success = true;
         result->finish_code = "kOk";
-        goal_handle->succeed(result);
+        try { goal_handle->succeed(result); } catch (...) {}
     }
 
     // --- Rby1 Joint Command Handlers ---
@@ -976,7 +1033,7 @@ namespace rby1_ros2{
                 result->success = false;
                 result->finish_code = "Robot is disabled (power/servo is off)";
                 RCLCPP_WARN(this->get_logger(), "\033[1;33m[CONTROL REJECTED] Joint command rejected: Robot is disabled (power/servo is off).\033[0m");
-                goal_handle->abort(result);
+                try { goal_handle->abort(result); } catch (...) {}
                 return;
             }
 
@@ -984,21 +1041,21 @@ namespace rby1_ros2{
                 result->success = false;
                 result->finish_code = "Torso is in Gravity Compensation mode!";
                 RCLCPP_WARN(this->get_logger(), "\033[1;33m[CONTROL REJECTED] Joint command rejected: Torso is in Gravity Compensation mode!\033[0m");
-                goal_handle->abort(result);
+                try { goal_handle->abort(result); } catch (...) {}
                 return;
             }
             if (!goal->right_arm.position.empty() && gravity_compensation_right_arm_) {
                 result->success = false;
                 result->finish_code = "Right arm is in Gravity Compensation mode!";
                 RCLCPP_WARN(this->get_logger(), "\033[1;33m[CONTROL REJECTED] Joint command rejected: Right arm is in Gravity Compensation mode!\033[0m");
-                goal_handle->abort(result);
+                try { goal_handle->abort(result); } catch (...) {}
                 return;
             }
             if (!goal->left_arm.position.empty() && gravity_compensation_left_arm_) {
                 result->success = false;
                 result->finish_code = "Left arm is in Gravity Compensation mode!";
                 RCLCPP_WARN(this->get_logger(), "\033[1;33m[CONTROL REJECTED] Joint command rejected: Left arm is in Gravity Compensation mode!\033[0m");
-                goal_handle->abort(result);
+                try { goal_handle->abort(result); } catch (...) {}
                 return;
             }
 
@@ -1008,16 +1065,51 @@ namespace rby1_ros2{
                 RCLCPP_ERROR(this->get_logger(), "\033[1;31m[CONTROL MANAGER ERROR] Control Manager not ready for Rby1JointCommand.\033[0m");
                 result->success = false;
                 result->finish_code = "Control Manager Error";
-                goal_handle->abort(result);
+                try { goal_handle->abort(result); } catch (...) {}
                 return;
             }
 
-            const auto& cm_state = robot_->GetControlManagerState();
-            if (cm_state.control_state == rb::ControlManagerState::ControlState::kExecuting ||
-                cm_state.control_state == rb::ControlManagerState::ControlState::kSwitching) {
-                RCLCPP_WARN(this->get_logger(), "\033[1;33m[CONTROL WARNING] Robot is moving. Canceling current control before sending new joint command...\033[0m");
-                robot_->CancelControl();
+            bool incoming_torso = !goal->torso.position.empty();
+            bool incoming_left_arm = !goal->left_arm.position.empty();
+            bool incoming_right_arm = !goal->right_arm.position.empty();
+            bool incoming_head = !goal->head.position.empty();
+
+            bool overlap = (incoming_torso && active_torso_) ||
+                           (incoming_left_arm && active_left_arm_) ||
+                           (incoming_right_arm && active_right_arm_) ||
+                           (incoming_head && active_head_);
+
+            if (overlap) {
+                const auto& cm_state = robot_->GetControlManagerState();
+                if (cm_state.control_state == rb::ControlManagerState::ControlState::kExecuting ||
+                    cm_state.control_state == rb::ControlManagerState::ControlState::kSwitching) {
+                    RCLCPP_WARN(this->get_logger(), "\033[1;33m[CONTROL WARNING] Overlapping components detected. Canceling active control...\033[0m");
+                    robot_->CancelControl();
+                }
+            } else {
+                RCLCPP_INFO(this->get_logger(), "No overlapping components with current motion. Executing concurrently.");
             }
+
+            if (incoming_torso) active_torso_ = true;
+            if (incoming_left_arm) active_left_arm_ = true;
+            if (incoming_right_arm) active_right_arm_ = true;
+            if (incoming_head) active_head_ = true;
+
+            struct ActiveComponentsCleanup {
+                RBY1_ROS2_DRIVER<ModelType>* driver;
+                bool torso;
+                bool left_arm;
+                bool right_arm;
+                bool head;
+                ActiveComponentsCleanup(RBY1_ROS2_DRIVER<ModelType>* d, bool t, bool la, bool ra, bool h)
+                    : driver(d), torso(t), left_arm(la), right_arm(ra), head(h) {}
+                ~ActiveComponentsCleanup() {
+                    if (torso) driver->active_torso_ = false;
+                    if (left_arm) driver->active_left_arm_ = false;
+                    if (right_arm) driver->active_right_arm_ = false;
+                    if (head) driver->active_head_ = false;
+                }
+            } cleanup{this, incoming_torso, incoming_left_arm, incoming_right_arm, incoming_head};
 
             rb::ComponentBasedCommandBuilder component_cmd_builder;
             rb::BodyComponentBasedCommandBuilder body_comp;
@@ -1028,6 +1120,84 @@ namespace rby1_ros2{
                 if (cmd.position.empty()) return true; // Ignore empty parts
 
                 Eigen::VectorXd q = Eigen::Map<const Eigen::VectorXd>(cmd.position.data(), cmd.position.size());
+                Eigen::VectorXd clamped_vel_limits(cmd.position.size());
+                Eigen::VectorXd clamped_accel_limits(cmd.position.size());
+
+                for (size_t i = 0; i < cmd.position.size(); ++i) {
+                    clamped_vel_limits[i] = cmd.velocity_limit;
+                    clamped_accel_limits[i] = cmd.acceleration_limit;
+                }
+
+                if (dynamics_ && dyn_state_ && q_lower_.size() > 0) {
+                    if (cmd.use_group_joint) {
+                        if (cmd.position.size() == cmd.joint_names.size()) {
+                            for (size_t i = 0; i < cmd.joint_names.size(); ++i) {
+                                std::string commanded_name = cmd.joint_names[i];
+                                
+                                int pinocchio_idx = -1;
+                                for (size_t k = 0; k < dyn_joint_names_.size(); ++k) {
+                                    if (dyn_joint_names_[k] == commanded_name) {
+                                        pinocchio_idx = k;
+                                        break;
+                                    }
+                                }
+                                if (pinocchio_idx == -1) continue;
+
+                                double pos = cmd.position[i];
+                                double min_p = q_lower_[pinocchio_idx];
+                                double max_p = q_upper_[pinocchio_idx];
+
+                                // 1. Strict Position Limit Validation
+                                if (pos < min_p || pos > max_p) {
+                                    err_msg = "Safety Limit Exceeded: Commanded position for joint '" + commanded_name + 
+                                              "' (" + std::to_string(pos) + " rad) is out of safety range [" + 
+                                              std::to_string(min_p) + ", " + std::to_string(max_p) + "] rad.";
+                                    RCLCPP_ERROR(this->get_logger(), "\033[1;31m[SAFETY ERROR] %s\033[0m", err_msg.c_str());
+                                    return false;
+                                }
+
+
+                            }
+                        }
+                    } else {
+                        const std::vector<unsigned int>* part_indices = nullptr;
+                        if (part_name == "torso") part_indices = &info_.torso_joint_idx;
+                        else if (part_name == "right_arm") part_indices = &info_.right_arm_joint_idx;
+                        else if (part_name == "left_arm") part_indices = &info_.left_arm_joint_idx;
+                        else if (part_name == "head") part_indices = &info_.head_joint_idx;
+
+                        if (part_indices && cmd.position.size() == part_indices->size()) {
+                            for (size_t i = 0; i < cmd.position.size(); ++i) {
+                                size_t global_idx = (*part_indices)[i];
+                                std::string joint_name = info_.joint_infos[global_idx].name;
+
+                                int pinocchio_idx = -1;
+                                for (size_t k = 0; k < dyn_joint_names_.size(); ++k) {
+                                    if (dyn_joint_names_[k] == joint_name) {
+                                        pinocchio_idx = k;
+                                        break;
+                                    }
+                                }
+                                if (pinocchio_idx == -1) continue;
+
+                                double pos = cmd.position[i];
+                                double min_p = q_lower_[pinocchio_idx];
+                                double max_p = q_upper_[pinocchio_idx];
+
+                                // 1. Strict Position Limit Validation
+                                if (pos < min_p || pos > max_p) {
+                                    err_msg = "Safety Limit Exceeded: Commanded position for joint '" + joint_name + 
+                                              "' (" + std::to_string(pos) + " rad) is out of safety range [" + 
+                                              std::to_string(min_p) + ", " + std::to_string(max_p) + "] rad.";
+                                    RCLCPP_ERROR(this->get_logger(), "\033[1;31m[SAFETY ERROR] %s\033[0m", err_msg.c_str());
+                                    return false;
+                                }
+
+
+                            }
+                        }
+                    }
+                }
 
                 if (cmd.use_group_joint && part_name == "torso") {
                     if (cmd.joint_names.empty()) {
@@ -1044,6 +1214,12 @@ namespace rby1_ros2{
                     b.SetJointNames(cmd.joint_names);
                     b.SetPosition(q);
                     b.SetMinimumTime(cmd.minimum_time);
+                    if (cmd.velocity_limit > 0.0) {
+                        b.SetVelocityLimit(clamped_vel_limits);
+                    }
+                    if (cmd.acceleration_limit > 0.0) {
+                        b.SetAccelerationLimit(clamped_accel_limits);
+                    }
                     body_comp.SetTorsoCommand(rb::TorsoCommandBuilder(b));
                     use_body = true;
                     return true;
@@ -1072,6 +1248,13 @@ namespace rby1_ros2{
                         b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(cmd.control_hold_time));
                         b.SetPosition(q);
                         b.SetMinimumTime(cmd.minimum_time);
+
+                        if (cmd.velocity_limit > 0.0) {
+                            b.SetVelocityLimit(Eigen::VectorXd::Constant(expected_dof, cmd.velocity_limit));
+                        }
+                        if (cmd.acceleration_limit > 0.0) {
+                            b.SetAccelerationLimit(Eigen::VectorXd::Constant(expected_dof, cmd.acceleration_limit));
+                        }
                         
                         std::vector<double> stiffness = cmd.stiffness;
                         if (stiffness.empty()) stiffness.assign(expected_dof, 100.0);
@@ -1094,6 +1277,13 @@ namespace rby1_ros2{
                     b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(cmd.control_hold_time));
                     b.SetPosition(q);
                     b.SetMinimumTime(cmd.minimum_time);
+
+                    if (cmd.velocity_limit > 0.0) {
+                        b.SetVelocityLimit(Eigen::VectorXd::Constant(expected_dof, cmd.velocity_limit));
+                    }
+                    if (cmd.acceleration_limit > 0.0) {
+                        b.SetAccelerationLimit(Eigen::VectorXd::Constant(expected_dof, cmd.acceleration_limit));
+                    }
                     
                     if (part_name == "torso") body_comp.SetTorsoCommand(rb::TorsoCommandBuilder(b));
                     else if (part_name == "right_arm") body_comp.SetRightArmCommand(rb::ArmCommandBuilder(b));
@@ -1147,35 +1337,7 @@ namespace rby1_ros2{
                 component_cmd_builder.SetBodyCommand(rb::BodyCommandBuilder(body_comp));
             }
 
-            if (stream_active_ && stream_handler_) {
-                RCLCPP_INFO(this->get_logger(), "Streaming joint command via persistent stream...");
-                stream_handler_->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder));
-                
-                double max_min_time = 0.0;
-                if (!goal->torso.position.empty() && goal->torso.minimum_time > max_min_time) max_min_time = goal->torso.minimum_time;
-                if (!goal->right_arm.position.empty() && goal->right_arm.minimum_time > max_min_time) max_min_time = goal->right_arm.minimum_time;
-                if (!goal->left_arm.position.empty() && goal->left_arm.minimum_time > max_min_time) max_min_time = goal->left_arm.minimum_time;
-                if (!goal->head.position.empty() && goal->head.minimum_time > max_min_time) max_min_time = goal->head.minimum_time;
 
-                if (max_min_time <= 0.0) max_min_time = 2.0;
-
-                rclcpp::Rate rate(10);
-                auto start_time = this->now();
-                while (rclcpp::ok() && (this->now() - start_time).seconds() < max_min_time) {
-                    if (goal_handle->is_canceling()) {
-                        result->success = false;
-                        result->finish_code = "kCanceled";
-                        goal_handle->canceled(result);
-                        return;
-                    }
-                    rate.sleep();
-                }
-
-                result->success = true;
-                result->finish_code = "kOk";
-                goal_handle->succeed(result);
-                return;
-            }
 
             auto cmd_handler = robot_->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder), goal->priority);
             
@@ -1185,7 +1347,7 @@ namespace rby1_ros2{
                     cmd_handler->Cancel();
                     result->success = false;
                     result->finish_code = "kCanceled";
-                    goal_handle->canceled(result);
+                    try { goal_handle->canceled(result); } catch (...) {}
                     return;
                 }
 
@@ -1195,13 +1357,13 @@ namespace rby1_ros2{
                     cmd_handler->Cancel();
                     result->success = false;
                     result->finish_code = "Fault Detected";
-                    goal_handle->abort(result);
+                    try { goal_handle->abort(result); } catch (...) {}
                     return;
                 }
 
                 auto feedback = std::make_shared<Rby1JointCommand::Feedback>();
                 feedback->current_state = "excuting";
-                goal_handle->publish_feedback(feedback);
+                try { goal_handle->publish_feedback(feedback); } catch (...) {}
                 rate.sleep();
             }
 
@@ -1215,9 +1377,9 @@ namespace rby1_ros2{
                 result->success = (result->finish_code == "kOk");
                 
                 if (result->success) {
-                    goal_handle->succeed(result);
+                    try { goal_handle->succeed(result); } catch (...) {}
                 } else {
-                    goal_handle->abort(result);
+                    try { goal_handle->abort(result); } catch (...) {}
                     RCLCPP_INFO(this->get_logger(), "Rby1JointCommand failed. Attempting to recover control manager...");
                     this->check_controll_manager();
                 }
@@ -1226,7 +1388,7 @@ namespace rby1_ros2{
             RCLCPP_ERROR(this->get_logger(), "Exception in Rby1JointCommand: %s", e.what());
             result->success = false;
             result->finish_code = "kError";
-            goal_handle->abort(result);
+            try { goal_handle->abort(result); } catch (...) {}
             this->check_controll_manager();
         }
     }
@@ -1279,7 +1441,7 @@ namespace rby1_ros2{
                 result->success = false;
                 result->finish_code = "Robot is disabled (power/servo is off)";
                 RCLCPP_WARN(this->get_logger(), "\033[1;33m[CONTROL REJECTED] Cartesian command rejected: Robot is disabled (power/servo is off).\033[0m");
-                goal_handle->abort(result);
+                try { goal_handle->abort(result); } catch (...) {}
                 return;
             }
 
@@ -1287,21 +1449,21 @@ namespace rby1_ros2{
                 result->success = false;
                 result->finish_code = "Torso is in Gravity Compensation mode!";
                 RCLCPP_WARN(this->get_logger(), "\033[1;33m[CONTROL REJECTED] Cartesian command rejected: Torso is in Gravity Compensation mode!\033[0m");
-                goal_handle->abort(result);
+                try { goal_handle->abort(result); } catch (...) {}
                 return;
             }
             if ((!goal->right_arm.ref_link.empty() || !goal->right_arm.target_link.empty()) && gravity_compensation_right_arm_) {
                 result->success = false;
                 result->finish_code = "Right arm is in Gravity Compensation mode!";
                 RCLCPP_WARN(this->get_logger(), "\033[1;33m[CONTROL REJECTED] Cartesian command rejected: Right arm is in Gravity Compensation mode!\033[0m");
-                goal_handle->abort(result);
+                try { goal_handle->abort(result); } catch (...) {}
                 return;
             }
             if ((!goal->left_arm.ref_link.empty() || !goal->left_arm.target_link.empty()) && gravity_compensation_left_arm_) {
                 result->success = false;
                 result->finish_code = "Left arm is in Gravity Compensation mode!";
                 RCLCPP_WARN(this->get_logger(), "\033[1;33m[CONTROL REJECTED] Cartesian command rejected: Left arm is in Gravity Compensation mode!\033[0m");
-                goal_handle->abort(result);
+                try { goal_handle->abort(result); } catch (...) {}
                 return;
             }
 
@@ -1311,16 +1473,46 @@ namespace rby1_ros2{
                 RCLCPP_ERROR(this->get_logger(), "\033[1;31m[CONTROL MANAGER ERROR] Control Manager not ready for Rby1CartesianCommand.\033[0m");
                 result->success = false;
                 result->finish_code = "Control Manager Error";
-                goal_handle->abort(result);
+                try { goal_handle->abort(result); } catch (...) {}
                 return;
             }
 
-            const auto& cm_state = robot_->GetControlManagerState();
-            if (cm_state.control_state == rb::ControlManagerState::ControlState::kExecuting ||
-                cm_state.control_state == rb::ControlManagerState::ControlState::kSwitching) {
-                RCLCPP_WARN(this->get_logger(), "\033[1;33m[CONTROL WARNING] Robot is moving. Canceling current control before sending new cartesian command...\033[0m");
-                robot_->CancelControl();
+            bool incoming_torso = !goal->torso.ref_link.empty();
+            bool incoming_left_arm = !goal->left_arm.ref_link.empty();
+            bool incoming_right_arm = !goal->right_arm.ref_link.empty();
+
+            bool overlap = (incoming_torso && active_torso_) ||
+                           (incoming_left_arm && active_left_arm_) ||
+                           (incoming_right_arm && active_right_arm_);
+
+            if (overlap) {
+                const auto& cm_state = robot_->GetControlManagerState();
+                if (cm_state.control_state == rb::ControlManagerState::ControlState::kExecuting ||
+                    cm_state.control_state == rb::ControlManagerState::ControlState::kSwitching) {
+                    RCLCPP_WARN(this->get_logger(), "\033[1;33m[CONTROL WARNING] Overlapping components detected. Canceling active control...\033[0m");
+                    robot_->CancelControl();
+                }
+            } else {
+                RCLCPP_INFO(this->get_logger(), "No overlapping components with current motion. Executing concurrently.");
             }
+
+            if (incoming_torso) active_torso_ = true;
+            if (incoming_left_arm) active_left_arm_ = true;
+            if (incoming_right_arm) active_right_arm_ = true;
+
+            struct ActiveComponentsCleanup {
+                RBY1_ROS2_DRIVER<ModelType>* driver;
+                bool torso;
+                bool left_arm;
+                bool right_arm;
+                ActiveComponentsCleanup(RBY1_ROS2_DRIVER<ModelType>* d, bool t, bool la, bool ra)
+                    : driver(d), torso(t), left_arm(la), right_arm(ra) {}
+                ~ActiveComponentsCleanup() {
+                    if (torso) driver->active_torso_ = false;
+                    if (left_arm) driver->active_left_arm_ = false;
+                    if (right_arm) driver->active_right_arm_ = false;
+                }
+            } cleanup{this, incoming_torso, incoming_left_arm, incoming_right_arm};
 
             rb::ComponentBasedCommandBuilder component_cmd_builder;
             rb::BodyComponentBasedCommandBuilder body_comp;
@@ -1380,11 +1572,34 @@ namespace rby1_ros2{
                     auto b = rb::CartesianCommandBuilder();
                     b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(cmd.control_hold_time));
                     b.SetMinimumTime(cmd.minimum_time);
-                    b.AddTarget(cmd.ref_link, cmd.target_link, T, cmd.linear_velocity_limit, cmd.angular_velocity_limit, cmd.acceleration_limit_scaling);
+
+                    double lin_vel = (cmd.linear_velocity_limit <= 0.0) ? robot_parameter_.linear_velocity_limit : cmd.linear_velocity_limit;
+                    double ang_vel = (cmd.angular_velocity_limit <= 0.0) ? robot_parameter_.angular_velocity_limit : cmd.angular_velocity_limit;
+                    double acc_scale = (cmd.acceleration_limit_scaling <= 0.0) ? robot_parameter_.acceleration_limit : cmd.acceleration_limit_scaling;
+
+                    b.AddTarget(cmd.ref_link, cmd.target_link, T, lin_vel, ang_vel, acc_scale);
                     b.SetStopPositionTrackingError(goal->stop_position_tracking_error);
                     b.SetStopOrientationTrackingError(goal->stop_orientation_tracking_error);
 
                     if (cmd.add_joint_position_target) {
+                        int pinocchio_idx = -1;
+                        for (size_t k = 0; k < dyn_joint_names_.size(); ++k) {
+                            if (dyn_joint_names_[k] == cmd.add_joint_name) {
+                                pinocchio_idx = k;
+                                break;
+                            }
+                        }
+                        if (pinocchio_idx != -1) {
+                            double min_p = q_lower_[pinocchio_idx];
+                            double max_p = q_upper_[pinocchio_idx];
+                            if (cmd.add_joint_value < min_p || cmd.add_joint_value > max_p) {
+                                err_msg = "Safety Limit Exceeded: Commanded additional joint '" + cmd.add_joint_name + 
+                                          "' value (" + std::to_string(cmd.add_joint_value) + " rad) is out of safety range [" + 
+                                          std::to_string(min_p) + ", " + std::to_string(max_p) + "] rad.";
+                                RCLCPP_ERROR(this->get_logger(), "\033[1;31m[SAFETY ERROR] %s\033[0m", err_msg.c_str());
+                                return false;
+                            }
+                        }
                         b.AddJointPositionTarget(cmd.add_joint_name, cmd.add_joint_value);
                     }
                     
@@ -1402,19 +1617,19 @@ namespace rby1_ros2{
             if (!process_part(goal->torso, "torso", err_msg)) {
                 result->success = false;
                 result->finish_code = err_msg;
-                goal_handle->abort(result);
+                try { goal_handle->abort(result); } catch (...) {}
                 return;
             }
             if (!process_part(goal->right_arm, "right_arm", err_msg)) {
                 result->success = false;
                 result->finish_code = err_msg;
-                goal_handle->abort(result);
+                try { goal_handle->abort(result); } catch (...) {}
                 return;
             }
             if (!process_part(goal->left_arm, "left_arm", err_msg)) {
                 result->success = false;
                 result->finish_code = err_msg;
-                goal_handle->abort(result);
+                try { goal_handle->abort(result); } catch (...) {}
                 return;
             }
 
@@ -1422,40 +1637,13 @@ namespace rby1_ros2{
                 RCLCPP_WARN(this->get_logger(), "Received empty Rby1CartesianCommand goal.");
                 result->success = false;
                 result->finish_code = "Empty targets";
-                goal_handle->abort(result);
+                try { goal_handle->abort(result); } catch (...) {}
                 return;
             }
 
             component_cmd_builder.SetBodyCommand(rb::BodyCommandBuilder(body_comp));
 
-            if (stream_active_ && stream_handler_) {
-                RCLCPP_INFO(this->get_logger(), "Streaming Cartesian command via persistent stream...");
-                stream_handler_->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder));
-                
-                double max_min_time = 0.0;
-                if (!goal->torso.ref_link.empty() && goal->torso.minimum_time > max_min_time) max_min_time = goal->torso.minimum_time;
-                if (!goal->right_arm.ref_link.empty() && goal->right_arm.minimum_time > max_min_time) max_min_time = goal->right_arm.minimum_time;
-                if (!goal->left_arm.ref_link.empty() && goal->left_arm.minimum_time > max_min_time) max_min_time = goal->left_arm.minimum_time;
 
-                if (max_min_time <= 0.0) max_min_time = 2.0;
-
-                rclcpp::Rate rate(10);
-                auto start_time = this->now();
-                while (rclcpp::ok() && (this->now() - start_time).seconds() < max_min_time) {
-                    if (goal_handle->is_canceling()) {
-                        result->success = false;
-                        result->finish_code = "kCanceled";
-                        goal_handle->canceled(result);
-                        return;
-                    }
-                    rate.sleep();
-                }
-
-                result->success = true;
-                result->finish_code = "kOk";
-                goal_handle->succeed(result);
-                return;
-            }
 
             auto cmd_handler = robot_->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder), goal->priority);
             
@@ -1465,7 +1653,7 @@ namespace rby1_ros2{
                     cmd_handler->Cancel();
                     result->success = false;
                     result->finish_code = "kCanceled";
-                    goal_handle->canceled(result);
+                    try { goal_handle->canceled(result); } catch (...) {}
                     return;
                 }
 
@@ -1475,7 +1663,7 @@ namespace rby1_ros2{
                     cmd_handler->Cancel();
                     result->success = false;
                     result->finish_code = "Fault Detected";
-                    goal_handle->abort(result);
+                    try { goal_handle->abort(result); } catch (...) {}
                     return;
                 }
 
@@ -1492,9 +1680,9 @@ namespace rby1_ros2{
                 result->success = (result->finish_code == "kOk");
                 
                 if (result->success) {
-                    goal_handle->succeed(result);
+                    try { goal_handle->succeed(result); } catch (...) {}
                 } else {
-                    goal_handle->abort(result);
+                    try { goal_handle->abort(result); } catch (...) {}
                     RCLCPP_INFO(this->get_logger(), "Rby1CartesianCommand failed. Attempting to recover control manager...");
                     this->check_controll_manager();
                 }
@@ -1503,7 +1691,7 @@ namespace rby1_ros2{
             RCLCPP_ERROR(this->get_logger(), "Exception in Rby1CartesianCommand: %s", e.what());
             result->success = false;
             result->finish_code = "kError";
-            goal_handle->abort(result);
+            try { goal_handle->abort(result); } catch (...) {}
             this->check_controll_manager();
         }
     }
@@ -1701,26 +1889,12 @@ namespace rby1_ros2{
     void RBY1_ROS2_DRIVER<ModelType>::cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg) {
         try {
             double linear_y = msg->linear.y;
-            bool is_m_type = false;
-            for (char c : info_.robot_model_name) {
-                if (c == 'm' || c == 'M') {
-                    is_m_type = true;
-                    break;
-                }
-            }
-
-            if (linear_y != 0.0 && !is_m_type) {
-                RCLCPP_ERROR(this->get_logger(), 
-                             "[VELOCITY ERROR] Sideways linear velocity (y = %.3f m/s) is ignored. "
-                             "This robot model (%s) is not an 'm'-type (mecanum base) robot and does not support lateral translation.",
-                             linear_y, info_.robot_model_name.c_str());
-                linear_y = 0.0;
-            }
-
             Eigen::Vector2d linear_vel(msg->linear.x, linear_y);
             double angular_vel = msg->angular.z;
 
             rb::SE2VelocityCommandBuilder se2_cmd;
+            se2_cmd.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(0.5));
+            se2_cmd.SetMinimumTime(0.1);
             se2_cmd.SetVelocity(linear_vel, angular_vel);
 
             rb::MobilityCommandBuilder mobility_cmd;

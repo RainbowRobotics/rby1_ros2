@@ -47,6 +47,7 @@ class MultiControlsExample(Node):
         
         self.power_client = self.create_client(StateOnOff, 'robot_power')
         self.servo_client = self.create_client(StateOnOff, 'robot_servo')
+        self.stream_control_client = self.create_client(StateOnOff, 'stream_control')
         self.state_sub = self.create_subscription(RobotState, 'joint_states/robot_state', self.state_callback, 10)
         self.control_state = None
 
@@ -73,6 +74,53 @@ class MultiControlsExample(Node):
         future = self.servo_client.call_async(req)
         rclpy.spin_until_future_complete(self, future)
         return future.result()
+
+    def toggle_stream(self, enable: bool) -> bool:
+        req = StateOnOff.Request()
+        req.state = enable
+        req.parameters = ""
+        self.get_logger().info(f"Calling stream_control: state={enable}...")
+        self.stream_control_client.wait_for_service()
+        future = self.stream_control_client.call_async(req)
+        rclpy.spin_until_future_complete(self, future)
+        res = future.result()
+        if res and res.success:
+            self.get_logger().info(f"Stream Control successfully {'enabled' if enable else 'disabled'}.")
+            return True
+        else:
+            self.get_logger().error(f"Failed to toggle stream control: {res.message if res else 'No response'}")
+            return False
+
+    def send_ready_pose(self):
+        goal_msg = Rby1JointCommand.Goal()
+        
+        for part in ['torso', 'right_arm', 'left_arm', 'head']:
+            cmd = JointCommand()
+            if part == 'torso':
+                cmd.position = [0.0] * 6
+            elif part == 'head':
+                cmd.position = [0.0] * 2
+            elif part == 'right_arm':
+                cmd.position = [0.0, -0.5, 0.0, -1.0, 0.0, 0.0, 0.0]
+            elif part == 'left_arm':
+                cmd.position = [0.0, 0.5, 0.0, -1.0, 0.0, 0.0, 0.0]
+            cmd.minimum_time = 4.0
+            setattr(goal_msg, part, cmd)
+
+        self.joint_client.wait_for_server()
+        self.get_logger().info('Sending Ready Pose Goal via Joint Action...')
+        future = self.joint_client.send_goal_async(goal_msg)
+        rclpy.spin_until_future_complete(self, future)
+        
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().error('Ready pose goal rejected!')
+            return False
+            
+        get_result_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(self, get_result_future)
+        result = get_result_future.result().result
+        return result.success
 
     def send_joint_goal(self, torso_pos, left_arm_pos, minimum_time):
         goal_msg = Rby1JointCommand.Goal()
@@ -119,6 +167,16 @@ def main(args=None):
         while action_client.wait_for_state() not in [2, 3] and rclpy.ok():
             rclpy.spin_once(action_client, timeout_sec=0.1)
 
+    # Move to Ready Pose First
+    action_client.get_logger().info('Sending Ready Pose Goal via Joint Action...')
+    if not action_client.send_ready_pose():
+        action_client.get_logger().error('Failed to move to Ready Pose. Exiting.')
+        action_client.destroy_node()
+        rclpy.shutdown()
+        return
+
+    time.sleep(1.0)
+
     min_time = 5.0
 
     # 1. Prepare Joint Goal (Torso: Joint Position, Left Arm: Joint Position)
@@ -127,9 +185,9 @@ def main(args=None):
 
     # 2. Prepare Cartesian Goal (Right Arm: Cartesian position)
     right_transform = Transform()
-    right_transform.translation.x = 0.4
+    right_transform.translation.x = 0.3
     right_transform.translation.y = -0.3
-    right_transform.translation.z = -0.1
+    right_transform.translation.z = -0.0
     right_transform.rotation.x = 0.0
     right_transform.rotation.y = 0.0
     right_transform.rotation.z = 0.0

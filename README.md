@@ -375,3 +375,23 @@ ros2 launch rby1_description rby1_state_publisher.launch.py model:=a version:=1_
 5. you can now control robot model by use joint state publisher gui
 
 ![rby1_state_publisher_5](Doc/img/state_checker_guide_5.png)
+
+---
+
+## 10. Troubleshooting & Known Issues
+
+### Issue: Control Commands Rejected After Trajectory Stream Interruptions (스트림 제어 노드 급작 종료 시 제어 불가 현상)
+
+* **Symptom (증상)**: 
+  If a stream-based trajectory control node (e.g., using persistent trajectory streams) is suddenly terminated or killed mid-operation, the driver's stream state remains active. Until this stream mode is explicitly closed, the driver will reject all other incoming joint or Cartesian motion commands, resulting in errors.
+  
+  스트림 통신(궤적 스트리밍 등)을 수행하던 중 노드가 갑자기 강제 종료(중단)된 경우, 드라이버 측에서는 스트림이 계속 동작 중인 것으로 간주하여 스트림이 유지됩니다. 이 스트림 모드를 끄기 전까지는 다른 일반 제어 명령이 모두 거부되며 오류가 발생합니다.
+
+* **Resolution (해결 방법)**: 
+  You must manually disable the streaming state by calling the `/stream_control` service with `state: false` in a separate terminal. This terminates the lingering stream and restores normal control capabilities.
+  
+  별도의 터미널을 열고 아래의 서비스를 호출하여 스트림 제어 모드를 강제로 비활성화(`false` 전송)한 후 정상적으로 제어 명령을 다시 실행해 주시기 바랍니다:
+
+  ```bash
+  ros2 service call /stream_control rby1_msgs/srv/StateOnOff "{state: false}"
+  ```
