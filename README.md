@@ -22,11 +22,15 @@ It wraps the RBY1 C++ SDK into a ROS 2 node, providing state monitoring and mult
 
 <https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html>
 
-### 1-2. Install RBY1 Simulator (Docker)
+### 1-2. Install RB-Y1 SDK
+
+<https://github.com/RainbowRobotics/rby1-sdk>
+
+### 1-3. Install RBY1 Simulator (Docker)
 
 <https://hub.docker.com/r/rainbowroboticsofficial/rby1-sim>
 
-### 1-3. Environment Setup
+### 1-4. Environment Setup
 
 Add the following lines to `~/.bashrc`:
 
