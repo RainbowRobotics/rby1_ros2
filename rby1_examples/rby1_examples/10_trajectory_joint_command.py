@@ -2,14 +2,14 @@
 """
 Trajectory Joint Command Example
 ===============================
-Demonstrates multi-point whole-body trajectory streaming via the StreamPosition
+Demonstrates multi-point whole-body trajectory streaming via the standard FollowJointTrajectory
 action client over a persistent command stream.
 
 Sequence:
   1. Ensure the robot is powered and enabled.
   2. Move whole body to Zero Pose.
   3. Call the '/stream_control' service to enable a persistent command stream.
-  4. Send a whole-body trajectory using the StreamPosition action client.
+  4. Send a whole-body trajectory using the FollowJointTrajectory action client.
   5. Call the '/stream_control' service with state=False to disable stream.
   6. Return to Zero Pose.
 """
@@ -17,7 +17,8 @@ import time
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
-from rby1_msgs.action import StreamPosition, Rby1JointCommand
+from control_msgs.action import FollowJointTrajectory
+from rby1_msgs.action import Rby1JointCommand
 from rby1_msgs.msg import RobotState, JointCommand
 from rby1_msgs.srv import StateOnOff
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
@@ -25,7 +26,7 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 class TrajectoryJointCommand(Node):
     def __init__(self):
         super().__init__('trajectory_joint_command')
-        self._stream_client = ActionClient(self, StreamPosition, 'stream_position_command')
+        self._stream_client = ActionClient(self, FollowJointTrajectory, 'follow_joint_trajectory')
         self._zero_pose_client = ActionClient(self, Rby1JointCommand, 'robot_joint')
         self.power_client = self.create_client(StateOnOff, 'robot_power')
         self.servo_client = self.create_client(StateOnOff, 'robot_servo')
@@ -146,7 +147,7 @@ class TrajectoryJointCommand(Node):
 
     def send_stream_goal(self, trajectory):
         self.get_logger().info('Starting Trajectory Streaming...')
-        goal_msg = StreamPosition.Goal()
+        goal_msg = FollowJointTrajectory.Goal()
         goal_msg.trajectory = trajectory
 
         self._stream_client.wait_for_server()
@@ -208,7 +209,7 @@ def main(args=None):
         get_result_future = goal_handle.get_result_async()
         rclpy.spin_until_future_complete(action_client, get_result_future)
         result = get_result_future.result().result
-        action_client.get_logger().info(f'Trajectory streaming completed: finish_code={result.finish_code}')
+        action_client.get_logger().info(f'Trajectory streaming completed: error_code={result.error_code}, error_string={result.error_string}')
 
     time.sleep(2.0)
 

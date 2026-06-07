@@ -2,6 +2,7 @@
 
 > [!CAUTION]
 > ## The current driver is in beta. For safe use, please test the features in a simulation first.
+> Please note that package contents, APIs, topics, and parameters may change continuously during the beta period.
 
 ## Overview
 
@@ -45,7 +46,7 @@ source /opt/ros/humble/setup.bash
 source ~/.bashrc
 ```
 
-### 1-4. Build
+### 1-5. Build
 
 ```bash
 mkdir -p rby1_ros2_ws/src
@@ -56,7 +57,7 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-### 1-5. Configure `driver_parameters.yaml`
+### 1-6. Configure `driver_parameters.yaml`
 
 Located at `rby1_driver/config/driver_parameters.yaml`.  
 Edit this file to match your robot before launching the driver.  
@@ -70,9 +71,6 @@ Because the workspace was built with `--symlink-install`, **no rebuild is needed
 |-----------|---------|-------------|
 | `robot_ip` | `"127.0.0.1:50051"` | Robot IP address and gRPC port |
 | `model` | `"m"` | Robot model — `"a"` (RBY1-A) or `"m"` (RBY1-M) |
-| `state_topic_name` | `"joint_states"` | Fixed default namespace prefix for all state topics |
-| `joint_position_topic_name` | `"robot_joint"` | Fixed default action server name for joint position commands |
-| `cartesian_position_topic_name` | `"robot_cartesian"` | Fixed default action server name for Cartesian commands |
 | `get_state_period` | `0.01` | State publish interval (seconds) — default 100 Hz |
 | `minimum_time` | `2.0` | Default minimum execution time for motion commands (seconds) |
 | `angular_velocity_limit` | `4.712` | Joint angular velocity limit (rad/s) |
@@ -83,14 +81,14 @@ Because the workspace was built with `--symlink-install`, **no rebuild is needed
 | `se2_angular_acceleration_limit` | `0.5` | Angular acceleration limit for SE2 velocity commands |
 | `fault_reset_trigger` | `true` | Auto-reset MAJOR/MINOR fault on driver startup |
 | `node_power_off_trigger` | `false` | Power off robot automatically when driver node exits |
-| `collision_enable` | `false` | Enable self-collision detection |
+| `collision_safety_enable` | `false` | Enable automatic retreat to initial pose on collision |
 | `collision_threshold` | `0.01` | Collision detection distance threshold (meters) |
 | `publish_battery_state` | `true` | Enable battery state topic |
 | `publish_tool_flange_state` | `true` | Enable tool flange state topics (left + right) |
 
 ---
 
-### 1-6. Run Simulator (optional)
+### 1-7. Run Simulator (optional)
 
 If you do not have a physical robot, run the Docker simulator.  
 The robot IP in this case is `"127.0.0.1:50051"` or `"localhost:50051"`.  
@@ -110,7 +108,7 @@ sudo docker run --rm \
 
 ---
 
-### 1-7. Launch the Driver
+### 1-8. Launch the Driver
 
 ```bash
 # In your workspace root
@@ -123,7 +121,7 @@ ros2 launch rby1_driver rby1_ros2_driver.launch.py
 ros2 launch rby1_driver rby1_ros2_driver.launch.py namespace:=my_robot
 ```
 
-### 1-8. Run Examples
+### 1-9. Run Examples
 
 Each example can be run in a **separate terminal** while the driver is active:
 ```bash
@@ -134,34 +132,128 @@ ros2 run rby1_examples <example_name>
 | Example | Command | Description |
 |---------|---------|-------------|
 | `01_power_control` | `ros2 run rby1_examples 01_power_control` | Full power lifecycle: Power ON/OFF, Servo ON/OFF |
-| `02_brake_control` | `ros2 run rby1_examples 02_brake_control` | Releases and re-engages arm brakes via IDLE state |
-| `03_robot_status_monitor` | `ros2 run rby1_examples 03_robot_status_monitor` | Comprehensive state monitor (CM state, brakes, battery, FT) |
-| `04_tool_flange_monitoring` | `ros2 run rby1_examples 04_tool_flange_monitoring` | Continuously prints tool flange FT/IMU/IO data |
-| `05_joint_state_monitoring` | `ros2 run rby1_examples 05_joint_state_monitoring` | Prints per-component joint positions in real time |
-| `06_gravity_compensation` | `ros2 run rby1_examples 06_gravity_compensation` | Enables gravity compensation (direct teaching) mode |
-| `08_zero_pose` | `ros2 run rby1_examples 08_zero_pose` | Moves all joints to 0 rad simultaneously |
-| `09_joint_command` | `ros2 run rby1_examples 09_joint_command` | Sends Ready Pose → Zero Pose via joint position action |
-| `10_cartesian_command` | `ros2 run rby1_examples 10_cartesian_command` | Moves the right arm to a target Cartesian pose |
-| `11_multi_controls` | `ros2 run rby1_examples 11_multi_controls` | Simultaneous joint + Cartesian control per body part |
-| `12_trajectory_joint_command` | `ros2 run rby1_examples 12_trajectory_joint_command` | Streams a pre-computed trajectory via persistent command streams |
-| `13_cancel_control` | `ros2 run rby1_examples 13_cancel_control` | Demonstrates action cancel and Trigger service cancel |
-| `14_mobile_base_control` | `ros2 run rby1_examples 14_mobile_base_control` | Drives robot wheels via relative cmd_vel Twists |
-| `15_stream_command` | `ros2 run rby1_examples 15_stream_command` | Alternates Zero/Ready poses using regular joint commands over persistent stream with varying wait intervals |
+| `02_robot_status_monitor` | `ros2 run rby1_examples 02_robot_status_monitor` | Comprehensive state monitor (CM state, brakes, battery, FT) |
+| `03_tool_flange_monitoring` | `ros2 run rby1_examples 03_tool_flange_monitoring` | Continuously prints tool flange FT/IMU/IO data |
+| `04_joint_state_monitoring` | `ros2 run rby1_examples 04_joint_state_monitoring` | Prints per-component joint positions in real time |
+| `05_gravity_compensation` | `ros2 run rby1_examples 05_gravity_compensation` | Enables gravity compensation (direct teaching) mode |
+| `06_zero_pose` | `ros2 run rby1_examples 06_zero_pose` | Moves all joints to 0 rad simultaneously |
+| `07_joint_command` | `ros2 run rby1_examples 07_joint_command` | Sends Ready Pose → Zero Pose via joint position action |
+| `08_cartesian_command` | `ros2 run rby1_examples 08_cartesian_command` | Moves the right arm to a target Cartesian pose |
+| `09_multi_controls` | `ros2 run rby1_examples 09_multi_controls` | Simultaneous joint + Cartesian control per body part |
+| `10_trajectory_joint_command` | `ros2 run rby1_examples 10_trajectory_joint_command` | Streams a pre-computed trajectory via standard FollowJointTrajectory action |
+| `11_cancel_control` | `ros2 run rby1_examples 11_cancel_control` | Demonstrates action cancel and Trigger service cancel |
+| `12_mobile_base_control` | `ros2 run rby1_examples 12_mobile_base_control` | Drives robot wheels via relative cmd_vel Twists |
+| `13_stream_command` | `ros2 run rby1_examples 13_stream_command` | Alternates Zero/Ready poses using regular joint commands over persistent stream with varying wait intervals |
+| `14_collision_safety_control` | `ros2 run rby1_examples 14_collision_safety_control` | Enables/disables the automatic retreat to initial safe pose on collision |
 
 ---
 
-## 2. Package Structure
+## 2. Visualization & Robot Description (`rby1_description`)
+
+You can use the robot's basic TF structure and state publisher through the commands below. When implementing features related to rby1, please use the model files from the corresponding package.
+
+- **Parameters**:
+  - `model_name` : `rby1a`, `rby1m`
+  - `model_version`
+    - `rby1a` : `1.0`, `1.1`, `1.2`
+    - `rby1m` : `1.0`, `1.1`, `1.2`, `1.3`
+
+```bash
+source install/setup.bash
+ros2 launch rby1_description rby1_state_publisher.launch.py model:=a version:=1_1
+```
+
+1. If you launch this command, you can see the following window:
+
+![rby1_state_publisher_1](Doc/img/state_checker_guide_1.png)
+
+2. Click 'Add', and add plugins `TF` and `RobotModel`:
+
+![rby1_state_publisher_2](Doc/img/state_checker_guide_2.png)
+
+3. Click 'Fixed Frame' and set to `base`:
+
+![rby1_state_publisher_3](Doc/img/state_checker_guide_3.png)
+
+4. Click 'RobotModel', and select Topics -> `/robot_description`:
+
+![rby1_state_publisher_4](Doc/img/state_checker_guide_4.png)
+
+5. You can now control the robot model using the joint state publisher GUI:
+
+![rby1_state_publisher_5](Doc/img/state_checker_guide_5.png)
+
+---
+
+## 3. Troubleshooting & Known Issues
+
+### Issue: Control Commands Rejected After Trajectory Stream Interruptions (스트림 제어 노드 급작 종료 시 제어 불가 현상)
+
+* **Symptom (증상)**: 
+  If a stream-based trajectory control node (e.g., using persistent trajectory streams) is suddenly terminated or killed mid-operation, the driver's stream state remains active. Until this stream mode is explicitly closed, the driver will reject all other incoming joint or Cartesian motion commands, resulting in errors.
+  
+  스트림 통신(궤적 스트리밍 등)을 수행하던 중 노드가 갑자기 강제 종료(중단)된 경우, 드라이버 측에서는 스트림이 계속 동작 중인 것으로 간주하여 스트림이 유지됩니다. 이 스트림 모드를 끄기 전까지는 다른 일반 제어 명령이 모두 거부되며 오류가 발생합니다.
+  
+* **Resolution (해결 방법)**: 
+  You must manually disable the streaming state by calling the `/stream_control` service with `state: false` in a separate terminal. This terminates the lingering stream and restores normal control capabilities.
+  
+  별도의 터미널을 열고 아래의 서비스를 호출하여 스트림 제어 모드를 강제로 비활성화(`false` 전송)한 후 정상적으로 제어 명령을 다시 실행해 주시기 바랍니다:
+
+  ```bash
+  ros2 service call /stream_control rby1_msgs/srv/StateOnOff "{state: false}"
+  ``` 
+
+### Issue: Driver Shutdown on Startup due to Collision (시뮬레이션 구동 시 충돌로 인한 드라이버 강제 종료 현상)
+
+* **Symptom (증상)**:
+  If you launch the driver while the robot is already in a collision state (especially common when launching in simulation where default/initial joint states overlap), the driver will detect the collision and immediately log a FATAL error and terminate for safety.
+  
+  시뮬레이션에서 이미 충돌이 난 상황에서 드라이버를 킬 경우, 충돌로 인해 드라이버가 강제로 종료된다.
+  
+* **Resolution (해결 방법)**:
+  Temporarily decrease the `collision_threshold` parameter in `driver_parameters.yaml` (e.g. to a very small value or `0.0`), launch the driver safely, command the robot joints to move to a safe, non-colliding pose, and then restore `collision_threshold` to its original value.
+  
+  따라서 `collision_threshold`를 더 줄인 상태에서 구동을 한 후 자세를 안전하게 이동시켜 사용하기를 바란다.
+
+> [!NOTE]
+> **Simulator Limitation**: Battery voltage, FT sensor, and IMU data read as `0.0` in simulation (no physical hardware).
+> **Tool flange topics**: Requires `publish_tool_flange_state: true` in `driver_parameters.yaml`.
+
+---
+
+## 4. Key Features
+
+### Robot Control
+- **Joint Position Control**: Command each body part (Torso, Right/Left Arm, Head) to target joint angles (rad) via the `robot_joint` action. All parts can be commanded simultaneously in one goal.
+- **Cartesian Position Control**: Command end-effector pose as a 4×4 SE3 transform via the `robot_cartesian` action.
+- **Impedance Control**: Both joint and Cartesian modes support impedance control with configurable stiffness and damping.
+- **Gravity Compensation**: Enables back-drivable joints for direct teaching; the driver continuously compensates gravity.
+- **Trajectory Streaming**: Send a pre-computed `JointTrajectory` (multi-waypoint) via the standard `follow_joint_trajectory` action.
+
+### State Monitoring
+- Joint states (position, velocity, torque) are published at up to 100 Hz per body part.
+- A unified `robot_state` topic provides Control Manager state, brake status, EMO, and CoM in one message.
+- Optional battery state and per-flange FT/IMU data can be enabled in `driver_parameters.yaml`.
+
+### Safety & Fault Management
+- Motion commands are rejected if the Control Manager is not in `ENABLE` or `EXECUTING` state.
+- Minor faults encountered during execution are automatically reset and control is resumed.
+- Self-collision detection (optional): automatically calls `CancelControl()` when link distance falls below `collision_threshold`.
+
+---
+
+## 5. Package Structure & Architecture
+
+### 5-1. Package Structure
 
 | Package | Role |
 |---------|------|
 | `rby1_driver` | C++ main driver node. Wraps the RBY1 SDK and exposes a ROS 2 interface. |
 | `rby1_msgs` | Custom message, service, and action definitions for robot control and state. |
 | `rby1_examples` | Python example scripts demonstrating all major driver features. |
-|`rby1_description` | Robot description for ROS, demonstrating URDF and Mesh files, and simple visualization launch file. |
+| `rby1_description` | Robot description for ROS, demonstrating URDF and Mesh files, and simple visualization launch file. |
 
----
-
-## 3. System Architecture
+### 5-2. System Architecture
 
 ![driver](Doc/img/driver.png)
 
@@ -195,14 +287,14 @@ ros2 run rby1_examples <example_name>
 
 ---
 
-## 4. Control Manager States
+## 6. Control Manager States
 
 The `RobotState.control_manager_state` field (and the `robot_state` topic) uses the following integer constants, also accessible as `RobotState.STATE_*`:
 
 | Value | Constant | Description |
 |-------|----------|-------------|
 | `0` | `STATE_NONE` | Driver not initialized or disconnected |
-| `1` | `STATE_IDLE` | Control Manager is disabled (IDLE). Safe for brake operations. |
+| `1` | `STATE_IDLE` | Control Manager is disabled (IDLE) |
 | `2` | `STATE_ENABLE` | Control Manager is active and holding position |
 | `3` | `STATE_EXECUTING` | A motion command is currently being executed |
 | `4` | `STATE_MAJOR_FAULT` | Unrecoverable hardware fault — requires reset |
@@ -210,9 +302,9 @@ The `RobotState.control_manager_state` field (and the `robot_state` topic) uses 
 
 ---
 
-## 5. Communication Interfaces
+## 7. Communication Interfaces
 
-### 5-1. Topics (Publishers)
+### 7-1. Topics (Publishers)
 
 | Topic | Type | Always Active | Description |
 |-------|------|:---:|-------------|
@@ -226,7 +318,7 @@ The `RobotState.control_manager_state` field (and the `robot_state` topic) uses 
 | `tool_flange/right` | `rby1_msgs/ToolFlangeState` | ⚙️ `publish_tool_flange_state` | Right flange: FT sensor, IMU, switch, voltage, digital I/O |
 | `odom` | `nav_msgs/Odometry` | ✅ | High-rate robot odometry and TF broadcast relative to node namespace |
 
-### 5-2. Topics (Subscribers)
+### 7-2. Topics (Subscribers)
 
 | Topic | Type | Description |
 |-------|------|-------------|
@@ -241,9 +333,7 @@ The `RobotState.control_manager_state` field (and the `robot_state` topic) uses 
 >
 > ⚙️ = controlled by the corresponding flag in `driver_parameters.yaml`
 
----
-
-### 5-3. Services
+### 7-3. Services
 
 | Service | Type | Description |
 |---------|------|-------------|
@@ -254,7 +344,7 @@ The `RobotState.control_manager_state` field (and the `robot_state` topic) uses 
 | `cancel_control` | `std_srvs/Trigger` | Cancel all active motion commands immediately |
 | `get_cartesian_pose` | `rby1_msgs/GetCartesianPose` | Query Cartesian transform between two links |
 | `control_manager_command` | `rby1_msgs/ControlManagerCommand` | Send `CMD_ENABLE` / `CMD_DISABLE` / `CMD_RESET` to the Control Manager |
-| `set_motor_brake` | `rby1_msgs/StateOnOff` | Engage (`state=true`) or release (`state=false`) a joint brake. `parameters`: joint name (e.g. `"right_arm_3"`). Only available in `STATE_IDLE`. |
+| `set_collision_safety` | `rby1_msgs/StateOnOff` | Enable (`state=true`) or disable (`state=false`) automatic retreat to initial safe pose on collision. |
 | `stream_control` | `rby1_msgs/StateOnOff` | Enable/disable persistent streaming mode with 10-minute hold times (`state=true` to enable, `state=false` to disable) |
 
 #### `ControlManagerCommand` constants
@@ -266,22 +356,17 @@ The `RobotState.control_manager_state` field (and the `robot_state` topic) uses 
 | `CMD_DISABLE` | `2` | Disable the Control Manager (transition to IDLE) |
 | `CMD_RESET` | `3` | Reset MAJOR/MINOR fault and return to IDLE |
 
----
-
-### 5-3. Action Servers
+### 7-4. Action Servers
 
 | Action Server | Type | Description |
 |---------------|------|-------------|
 | `robot_joint` | `rby1_msgs/Rby1JointCommand` | Whole-body joint position command. Each body part (torso, right_arm, left_arm, head) can be commanded independently in a single goal. |
 | `robot_cartesian` | `rby1_msgs/Rby1CartesianCommand` | Whole-body Cartesian command. Each arm and torso can be assigned an . geometry_msgs/msg/Transform.msg (position, quaternion)|
-| `stream_position_command` | `rby1_msgs/StreamPosition` | Streams a full `JointTrajectory` (multi-waypoint) to the robot. |
-
-> [!IMPORTANT]
-> The action server names (`robot_joint`, `robot_cartesian`) are configured via `joint_position_topic_name` and `cartesian_position_topic_name` in `driver_parameters.yaml`.
+| `follow_joint_trajectory` | `control_msgs/FollowJointTrajectory` | Standard ROS 2 trajectory execution action server (used directly by MoveIt). |
 
 ---
 
-## 6. Custom Message Types
+## 8. Custom Message Types
 
 ### `rby1_msgs/JointCommand` (used inside `Rby1JointCommand` goals)
 
@@ -329,89 +414,3 @@ The `RobotState.control_manager_state` field (and the `robot_state` topic) uses 
 | `output_voltage` | `int32` | Output voltage in millivolts |
 | `digital_input_a/b` | `bool` | Digital input A/B state |
 | `digital_output_a/b` | `bool` | Digital output A/B state |
-
----
-
-## 7. Key Features
-
-### Robot Control
-- **Joint Position Control**: Command each body part (Torso, Right/Left Arm, Head) to target joint angles (rad) via the `robot_joint` action. All parts can be commanded simultaneously in one goal.
-- **Cartesian Position Control**: Command end-effector pose as a 4×4 SE3 transform via the `robot_cartesian` action.
-- **Impedance Control**: Both joint and Cartesian modes support impedance control with configurable stiffness and damping.
-- **Gravity Compensation**: Enables back-drivable joints for direct teaching; the driver continuously compensates gravity.
-- **Trajectory Streaming**: Send a pre-computed `JointTrajectory` (multi-waypoint) via the `stream_position_command` action.
-
-### State Monitoring
-- Joint states (position, velocity, torque) are published at up to 100 Hz per body part.
-- A unified `robot_state` topic provides Control Manager state, brake status, EMO, and CoM in one message.
-- Optional battery state and per-flange FT/IMU data can be enabled in `driver_parameters.yaml`.
-
-### Safety & Fault Management
-- Motion commands are rejected if the Control Manager is not in `ENABLE` or `EXECUTING` state.
-- Minor faults encountered during execution are automatically reset and control is resumed.
-- Self-collision detection (optional): automatically calls `CancelControl()` when link distance falls below `collision_threshold`.
-- Brake operations are only allowed in `STATE_IDLE` to prevent mechanical damage.
-
----
-
-## 8. Notes & Known Limitations
-
-- **Simulator**: Battery voltage, FT sensor, and IMU data read as `0.0` in simulation (no physical hardware).
-- **Tool flange topics** require `publish_tool_flange_state: true` in `driver_parameters.yaml`.
-- **Brake control** requires the Control Manager to be in `STATE_IDLE`. As an extra mechanical safety measure, brake commands are strictly rejected if 48V power is active (to prevent disengaging/engaging mechanical brakes while joints are powered). The `brake_control` example handles these states automatically.
-- The `trajectory_joint_command` example currently uses `StreamPosition` only.
-
-## 9. rby1_description
-
--  You can use the robot's basic TF structure and state publisher through the commands below. When implementing features related to rby1, please use the model files from the corresponding package.
-
-- parameter
-  - model_name :rby1a , rby1m 
-  - model_version
-    - rby1a : 1.0, 1.1, 1.2
-    - rby1m : 1.0, 1.1, 1.2, 1.3
-
-```bash
-source install/setup.bash
-ros2 launch rby1_description rby1_state_publisher.launch.py model:=a version:=1_1
-
-```
-1. if you launch this command, you can see the following window
-
-![rby1_state_publisher_1](Doc/img/state_checker_guide_1.png)
-
-2. click 'Add', and add plugin `TF`,`RobotModel`
-
-![rby1_state_publisher_2](Doc/img/state_checker_guide_2.png)
-
-3. click Fixed Frame and set to `base`
-
-![rby1_state_publisher_3](Doc/img/state_checker_guide_3.png)
-
-4. click RobotModel, and select Topics->`/robot_description`
-
-![rby1_state_publisher_4](Doc/img/state_checker_guide_4.png)
-
-5. you can now control robot model by use joint state publisher gui
-
-![rby1_state_publisher_5](Doc/img/state_checker_guide_5.png)
-
----
-
-## 10. Troubleshooting & Known Issues
-
-### Issue: Control Commands Rejected After Trajectory Stream Interruptions (스트림 제어 노드 급작 종료 시 제어 불가 현상)
-
-* **Symptom (증상)**: 
-  If a stream-based trajectory control node (e.g., using persistent trajectory streams) is suddenly terminated or killed mid-operation, the driver's stream state remains active. Until this stream mode is explicitly closed, the driver will reject all other incoming joint or Cartesian motion commands, resulting in errors.
-  
-  스트림 통신(궤적 스트리밍 등)을 수행하던 중 노드가 갑자기 강제 종료(중단)된 경우, 드라이버 측에서는 스트림이 계속 동작 중인 것으로 간주하여 스트림이 유지됩니다. 이 스트림 모드를 끄기 전까지는 다른 일반 제어 명령이 모두 거부되며 오류가 발생합니다.
-
-* **Resolution (해결 방법)**: 
-  You must manually disable the streaming state by calling the `/stream_control` service with `state: false` in a separate terminal. This terminates the lingering stream and restores normal control capabilities.
-  
-  별도의 터미널을 열고 아래의 서비스를 호출하여 스트림 제어 모드를 강제로 비활성화(`false` 전송)한 후 정상적으로 제어 명령을 다시 실행해 주시기 바랍니다:
-
-  ```bash
-  ros2 service call /stream_control rby1_msgs/srv/StateOnOff "{state: false}"
-  ``` 

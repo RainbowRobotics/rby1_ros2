@@ -7,7 +7,7 @@ using the `/set_collision_safety` service, then commands a self-colliding arm po
 to verify the automatic safe return back to the initial zero pose.
 
 Run:
-  ros2 run rby1_examples collision_safety_control
+  ros2 run rby1_examples 14_collision_safety_control
 """
 import sys
 import time

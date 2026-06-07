@@ -30,7 +30,7 @@
     node_power_off_trigger: false
     
     # Collision options
-    collision_enable: false
+    collision_safety_enable: false
     collision_threshold: 0.01 # meter
 
     # Status publish triggers

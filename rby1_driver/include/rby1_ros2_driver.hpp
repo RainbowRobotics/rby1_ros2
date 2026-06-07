@@ -29,7 +29,7 @@
 #include "rby1-sdk/model.h"
 #include "rby1-sdk/robot_command_builder.h"
 #include "std_srvs/srv/trigger.hpp"
-#include "rby1_msgs/action/stream_position.hpp"
+#include "control_msgs/action/follow_joint_trajectory.hpp"
 #include "trajectory_msgs/msg/joint_trajectory.hpp"
 //local header file
 #include "type.hpp"
@@ -89,6 +89,7 @@ namespace rby1_ros2{
             rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr right_arm_pub_;
             rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr left_arm_pub_;
             rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr head_pub_;
+            rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;
             //rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr wheel_pub_;
             rclcpp::Publisher<rby1_msgs::msg::RobotState>::SharedPtr robot_state_pub_;
             rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr battery_state_pub_;
@@ -98,18 +99,24 @@ namespace rby1_ros2{
             std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
             rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
             bool stream_active_{false};
-            bool collision_enable_{false};
+            bool collision_enable_{true};
+            bool collision_safety_enable_{false};
+            std::atomic<bool> is_controlling_{false};
+            std::atomic<bool> is_recovering_{false};
+            bool has_initial_pose_{false};
+            std::vector<double> initial_joint_positions_;
+            void execute_collision_safety_retreat();
 
             // Timer for 100Hz publishing
             rclcpp::TimerBase::SharedPtr joint_state_timer_;
 
             using Rby1JointCommand = rby1_msgs::action::Rby1JointCommand;
             using Rby1CartesianCommand = rby1_msgs::action::Rby1CartesianCommand;
-            using StreamPosition = rby1_msgs::action::StreamPosition;
+            using FollowJointTrajectory = control_msgs::action::FollowJointTrajectory;
             
             rclcpp_action::Server<Rby1JointCommand>::SharedPtr rby1_joint_command_action_server_;
             rclcpp_action::Server<Rby1CartesianCommand>::SharedPtr rby1_cartesian_command_action_server_;
-            rclcpp_action::Server<StreamPosition>::SharedPtr stream_position_action_server_;
+            rclcpp_action::Server<FollowJointTrajectory>::SharedPtr follow_joint_trajectory_action_server_;
             
             rclcpp::Service<rby1_msgs::srv::StateOnOff>::SharedPtr power_service_;
             rclcpp::Service<rby1_msgs::srv::StateOnOff>::SharedPtr servo_service_;
@@ -118,15 +125,18 @@ namespace rby1_ros2{
             rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr cancel_control_service_;
             rclcpp::Service<rby1_msgs::srv::GetCartesianPose>::SharedPtr get_cartesian_pose_service_;
             rclcpp::Service<rby1_msgs::srv::ControlManagerCommand>::SharedPtr control_manager_service_;
-            rclcpp::Service<rby1_msgs::srv::StateOnOff>::SharedPtr motor_brake_service_;
+            // rclcpp::Service<rby1_msgs::srv::StateOnOff>::SharedPtr motor_brake_service_;
+            rclcpp::Service<rby1_msgs::srv::StateOnOff>::SharedPtr collision_safety_service_;
             rclcpp::Service<rby1_msgs::srv::StateOnOff>::SharedPtr stream_control_service_;
 
             void gravity_compensation_callback(const std::shared_ptr<rby1_msgs::srv::GravityCompensation::Request> request,
                                                std::shared_ptr<rby1_msgs::srv::GravityCompensation::Response> response);
             void control_manager_callback(const std::shared_ptr<rby1_msgs::srv::ControlManagerCommand::Request> request,
                                           std::shared_ptr<rby1_msgs::srv::ControlManagerCommand::Response> response);
-            void motor_brake_callback(const std::shared_ptr<rby1_msgs::srv::StateOnOff::Request> request,
-                                      std::shared_ptr<rby1_msgs::srv::StateOnOff::Response> response);
+            // void motor_brake_callback(const std::shared_ptr<rby1_msgs::srv::StateOnOff::Request> request,
+            //                           std::shared_ptr<rby1_msgs::srv::StateOnOff::Response> response);
+            void collision_safety_callback(const std::shared_ptr<rby1_msgs::srv::StateOnOff::Request> request,
+                                           std::shared_ptr<rby1_msgs::srv::StateOnOff::Response> response);
             void stream_control_callback(const std::shared_ptr<rby1_msgs::srv::StateOnOff::Request> request,
                                          std::shared_ptr<rby1_msgs::srv::StateOnOff::Response> response);
             void cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg);
@@ -161,11 +171,11 @@ namespace rby1_ros2{
 
 
 
-            // Stream Position Action Handlers
-            rclcpp_action::GoalResponse handle_stream_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const StreamPosition::Goal> goal);
-            rclcpp_action::CancelResponse handle_stream_cancel(const std::shared_ptr<rclcpp_action::ServerGoalHandle<StreamPosition>> goal_handle);
-            void handle_stream_accepted(const std::shared_ptr<rclcpp_action::ServerGoalHandle<StreamPosition>> goal_handle);
-            void execute_stream_position(const std::shared_ptr<rclcpp_action::ServerGoalHandle<StreamPosition>> goal_handle);
+            // Follow Joint Trajectory Action Handlers
+            rclcpp_action::GoalResponse handle_follow_joint_trajectory_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const FollowJointTrajectory::Goal> goal);
+            rclcpp_action::CancelResponse handle_follow_joint_trajectory_cancel(const std::shared_ptr<rclcpp_action::ServerGoalHandle<FollowJointTrajectory>> goal_handle);
+            void handle_follow_joint_trajectory_accepted(const std::shared_ptr<rclcpp_action::ServerGoalHandle<FollowJointTrajectory>> goal_handle);
+            void execute_follow_joint_trajectory(const std::shared_ptr<rclcpp_action::ServerGoalHandle<FollowJointTrajectory>> goal_handle);
 
             // Rby1 Joint Command Action Handlers
             rclcpp_action::GoalResponse handle_rby1_joint_goal(

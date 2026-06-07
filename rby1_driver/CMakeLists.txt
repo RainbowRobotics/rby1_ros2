@@ -20,6 +20,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
+find_package(control_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(rby1_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
@@ -49,6 +50,7 @@ add_executable(rby1_ros2_driver
  ament_target_dependencies(rby1_ros2_driver
  rclcpp
  rclcpp_action
+ control_msgs
  sensor_msgs
  rby1_msgs
  std_srvs
