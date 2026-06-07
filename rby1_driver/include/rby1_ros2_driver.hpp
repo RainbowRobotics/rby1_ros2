@@ -28,8 +28,14 @@
 #include "rby1-sdk/robot.h"
 #include "rby1-sdk/model.h"
 #include "rby1-sdk/robot_command_builder.h"
+#pragma GCC diagnostic push //remove warning log
+#pragma GCC diagnostic ignored "-Wreorder" //remove warning log
+#pragma GCC diagnostic ignored "-Wsign-compare" //remove warning log
+#include "rby1-sdk/math/optimal_control.h"
+#pragma GCC diagnostic pop //remove warning log
 #include "std_srvs/srv/trigger.hpp"
 #include "control_msgs/action/follow_joint_trajectory.hpp"
+#include <numeric>
 #include "trajectory_msgs/msg/joint_trajectory.hpp"
 //local header file
 #include "type.hpp"
@@ -100,12 +106,16 @@ namespace rby1_ros2{
             rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
             bool stream_active_{false};
             bool collision_enable_{true};
-            bool collision_safety_enable_{false};
+            bool collision_recovery_enable_{false};
+            bool collision_check_enable_{false};
             std::atomic<bool> is_controlling_{false};
             std::atomic<bool> is_recovering_{false};
             bool has_initial_pose_{false};
             std::vector<double> initial_joint_positions_;
             void execute_collision_safety_retreat();
+            int get_link_index(const std::string& name);
+            std::optional<std::string> get_predicted_collision_reason(const Eigen::VectorXd& target_q);
+            std::optional<Eigen::VectorXd> solve_cartesian_ik(const std::vector<typename rb::OptimalControl<ModelType::kRobotDOF>::LinkTarget>& link_targets);
 
             // Timer for 100Hz publishing
             rclcpp::TimerBase::SharedPtr joint_state_timer_;

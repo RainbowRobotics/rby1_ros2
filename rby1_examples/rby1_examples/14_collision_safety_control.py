@@ -162,8 +162,8 @@ def main(args=None):
     # Command right arm to cross to the left, and left arm to cross to the right
     # Joints 1, 2, 3 of right arm: [0.5, 0.8, -0.5, -1.57, 0.0, 0.0, 0.0]
     # Joints 1, 2, 3 of left arm: [0.5, -0.8, 0.5, -1.57, 0.0, 0.0, 0.0]
-    colliding_right_pos = [0.0, 0.8, -0.5, -1.57, 0.0, 0.0, 0.0]
-    colliding_left_pos = [0.0, -0.8, 0.5, -1.57, 0.0, 0.0, 0.0]
+    colliding_right_pos = [0.0, 0.0, 0.5, -1.57, 0.0, 0.0, 0.0]
+    colliding_left_pos = [0.0, 0.0, -0.5, -1.57, 0.0, 0.0, 0.0]
     
     future = node.send_joint_goal(torso_pos, colliding_right_pos, colliding_left_pos, head_pos, 8.0)
     rclpy.spin_until_future_complete(node, future)

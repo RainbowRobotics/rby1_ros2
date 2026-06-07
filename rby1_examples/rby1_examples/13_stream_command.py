@@ -170,7 +170,8 @@ class StreamCommand(Node):
         return result.success
 
 def main(args=None):
-    rclpy.init(args=args)
+    from rclpy.signals import SignalHandlerOptions
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     node = StreamCommand()
 
     # 1. Prepare Robot

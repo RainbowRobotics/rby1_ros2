@@ -1,0 +1,9 @@
+<library path="rby1_hardware">
+  <class name="rby1_hardware/RBY1SystemHardware"
+         type="rby1_hardware::RBY1SystemHardware"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      ros2_control hardware interface for Rainbow Robotics RBY1.
+    </description>
+  </class>
+</library>

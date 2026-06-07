@@ -1,4 +1,6 @@
 #include "rby1_ros2_driver.hpp"
+#include <iomanip>
+#include <sstream>
 namespace rby1_ros2{
     //using namespace rb;
 
@@ -192,7 +194,8 @@ namespace rby1_ros2{
         this->declare_parameter<double>("collision_threshold", 0.01);
         this->declare_parameter<bool>("publish_battery_state", true);
         this->declare_parameter<bool>("publish_tool_flange_state", true);
-        this->declare_parameter<bool>("collision_safety_enable", false);
+        this->declare_parameter<bool>("collision_recovery_enable", false);
+        this->declare_parameter<bool>("collision_check_enable", false);
         
         this->get_parameter("robot_ip", address);
         this->get_parameter("model", model);
@@ -218,7 +221,8 @@ namespace rby1_ros2{
         this->get_parameter("collision_threshold", collision_threshold_);
         this->get_parameter("publish_battery_state", publish_battery_state_);
         this->get_parameter("publish_tool_flange_state", publish_tool_flange_state_);
-        this->get_parameter("collision_safety_enable", collision_safety_enable_);
+        this->get_parameter("collision_recovery_enable", collision_recovery_enable_);
+        this->get_parameter("collision_check_enable", collision_check_enable_);
         collision_enable_ = true;
 
 
@@ -638,8 +642,10 @@ namespace rby1_ros2{
                     is_control_canceled_ = true;
                     stream_active_ = false;
 
-                    if (collision_safety_enable_) {
-                        if (is_controlling_) {
+                    if (collision_recovery_enable_) {
+                        if (is_recovering_) {
+                            // Currently recovering from collision, do not shut down
+                        } else if (is_controlling_ || has_initial_pose_) {
                             bool expected = false;
                             if (is_recovering_.compare_exchange_strong(expected, true)) {
                                 std::thread(&RBY1_ROS2_DRIVER<ModelType>::execute_collision_safety_retreat, this).detach();
@@ -985,6 +991,53 @@ namespace rby1_ros2{
             }
         }
 
+        // Collision check for trajectory waypoints
+        if (collision_check_enable_ && dynamics_ && dyn_state_) {
+            for (size_t i = 0; i < trajectory.points.size(); ++i) {
+                const auto& point = trajectory.points[i];
+                Eigen::Vector<double, ModelType::kRobotDOF> target_q = Eigen::Vector<double, ModelType::kRobotDOF>::Zero();
+                
+                // Initialize target_q with current robot positions
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    auto current_state = robot_->GetState();
+                    for (int k = 0; k < (int)dyn_joint_names_.size(); ++k) {
+                        std::string name = dyn_joint_names_[k];
+                        for (size_t j = 0; j < info_.joint_infos.size(); ++j) {
+                            if (info_.joint_infos[j].name == name) {
+                                target_q[k] = current_state.position[j];
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // Update target_q with waypoint positions
+                for (size_t j = 0; j < joint_mapping.size(); ++j) {
+                    if (joint_mapping[j] != -1 && j < point.positions.size()) {
+                        std::string joint_name = info_.joint_infos[joint_mapping[j]].name;
+                        for (size_t k = 0; k < dyn_joint_names_.size(); ++k) {
+                            if (dyn_joint_names_[k] == joint_name) {
+                                target_q[k] = point.positions[j];
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                auto reason = get_predicted_collision_reason(target_q);
+                if (reason.has_value()) {
+                    RCLCPP_WARN(this->get_logger(), 
+                                 "[PREDICTIVE COLLISION REJECTED] FollowJointTrajectory waypoint %lu predicts collision: %s",
+                                 i, reason.value().c_str());
+                    result->error_code = FollowJointTrajectory::Result::PATH_TOLERANCE_VIOLATED;
+                    result->error_string = reason.value() + " at trajectory waypoint index " + std::to_string(i);
+                    try { goal_handle->abort(result); } catch (...) {}
+                    return;
+                }
+            }
+        }
+
         // Auto-activate stream if not active
         bool stream_was_inactive = false;
         {
@@ -1232,6 +1285,71 @@ namespace rby1_ros2{
                 result->finish_code = "Control Manager Error";
                 try { goal_handle->abort(result); } catch (...) {}
                 return;
+            }
+
+            if (collision_check_enable_) {
+                Eigen::Vector<double, ModelType::kRobotDOF> target_q = Eigen::Vector<double, ModelType::kRobotDOF>::Zero();
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    auto current_state = robot_->GetState();
+                    for (int i = 0; i < (int)dyn_joint_names_.size(); ++i) {
+                        std::string name = dyn_joint_names_[i];
+                        for (size_t j = 0; j < info_.joint_infos.size(); ++j) {
+                            if (info_.joint_infos[j].name == name) {
+                                target_q[i] = current_state.position[j];
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                auto update_target_q_part = [&](const rby1_msgs::msg::JointCommand& cmd, const std::string& part_name) {
+                    if (cmd.position.empty()) return;
+                    if (cmd.use_group_joint) {
+                        for (size_t i = 0; i < cmd.joint_names.size() && i < cmd.position.size(); ++i) {
+                            std::string commanded_name = cmd.joint_names[i];
+                            for (size_t k = 0; k < dyn_joint_names_.size(); ++k) {
+                                if (dyn_joint_names_[k] == commanded_name) {
+                                    target_q[k] = cmd.position[i];
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        const std::vector<unsigned int>* part_indices = nullptr;
+                        if (part_name == "torso") part_indices = &info_.torso_joint_idx;
+                        else if (part_name == "right_arm") part_indices = &info_.right_arm_joint_idx;
+                        else if (part_name == "left_arm") part_indices = &info_.left_arm_joint_idx;
+                        else if (part_name == "head") part_indices = &info_.head_joint_idx;
+                        
+                        if (part_indices && cmd.position.size() == part_indices->size()) {
+                            for (size_t i = 0; i < cmd.position.size(); ++i) {
+                                size_t global_idx = (*part_indices)[i];
+                                std::string joint_name = info_.joint_infos[global_idx].name;
+                                for (size_t k = 0; k < dyn_joint_names_.size(); ++k) {
+                                    if (dyn_joint_names_[k] == joint_name) {
+                                        target_q[k] = cmd.position[i];
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+
+                update_target_q_part(goal->torso, "torso");
+                update_target_q_part(goal->right_arm, "right_arm");
+                update_target_q_part(goal->left_arm, "left_arm");
+                update_target_q_part(goal->head, "head");
+
+                auto reason = get_predicted_collision_reason(target_q);
+                if (reason.has_value()) {
+                    result->success = false;
+                    result->finish_code = reason.value();
+                    RCLCPP_WARN(this->get_logger(), "\033[1;33m[PREDICTIVE COLLISION REJECTED] %s\033[0m", reason.value().c_str());
+                    try { goal_handle->abort(result); } catch (...) {}
+                    return;
+                }
             }
 
             rb::ComponentBasedCommandBuilder component_cmd_builder;
@@ -1611,6 +1729,66 @@ namespace rby1_ros2{
                 result->finish_code = "Control Manager Error";
                 try { goal_handle->abort(result); } catch (...) {}
                 return;
+            }
+
+            if (collision_check_enable_) {
+                std::vector<typename rb::OptimalControl<ModelType::kRobotDOF>::LinkTarget> link_targets;
+                
+                auto add_target_helper = [&](const rby1_msgs::msg::CartesianCommand& cmd) -> bool {
+                    if (cmd.ref_link.empty() && cmd.target_link.empty()) return true;
+                    if (cmd.ref_link.empty() || cmd.target_link.empty()) {
+                        return false;
+                    }
+                    
+                    int ref_idx = get_link_index(cmd.ref_link);
+                    int target_idx = get_link_index(cmd.target_link);
+                    if (ref_idx == -1 || target_idx == -1) {
+                        return false;
+                    }
+                    
+                    typename rb::OptimalControl<ModelType::kRobotDOF>::LinkTarget target;
+                    target.ref_link_index = ref_idx;
+                    target.link_index = target_idx;
+                    
+                    Eigen::Quaterniond q(cmd.transform.rotation.w, cmd.transform.rotation.x, cmd.transform.rotation.y, cmd.transform.rotation.z);
+                    Eigen::Vector3d t(cmd.transform.translation.x, cmd.transform.translation.y, cmd.transform.translation.z);
+                    
+                    rb::math::SE3::MatrixType T = rb::math::SE3::MatrixType::Identity();
+                    T.block(0, 0, 3, 3) = q.toRotationMatrix();
+                    T.block(0, 3, 3, 1) = t;
+                    target.T = T;
+                    
+                    target.weight_position = 1000.0;
+                    target.weight_orientation = 100.0;
+                    
+                    link_targets.push_back(target);
+                    return true;
+                };
+
+                bool ok = true;
+                ok &= add_target_helper(goal->torso);
+                ok &= add_target_helper(goal->right_arm);
+                ok &= add_target_helper(goal->left_arm);
+
+                if (ok && !link_targets.empty()) {
+                    auto solved_q = solve_cartesian_ik(link_targets);
+                    if (!solved_q.has_value()) {
+                        result->success = false;
+                        result->finish_code = "Failed to solve Inverse Kinematics for target Cartesian commands";
+                        RCLCPP_WARN(this->get_logger(), "\033[1;33m[PREDICTIVE COLLISION ERROR] Cartesian command rejected: Failed to solve Inverse Kinematics.\033[0m");
+                        try { goal_handle->abort(result); } catch (...) {}
+                        return;
+                    }
+                    
+                    auto reason = get_predicted_collision_reason(solved_q.value());
+                    if (reason.has_value()) {
+                        result->success = false;
+                        result->finish_code = reason.value();
+                        RCLCPP_WARN(this->get_logger(), "\033[1;33m[PREDICTIVE COLLISION REJECTED] %s\033[0m", reason.value().c_str());
+                        try { goal_handle->abort(result); } catch (...) {}
+                        return;
+                    }
+                }
             }
 
             rb::ComponentBasedCommandBuilder component_cmd_builder;
@@ -2178,10 +2356,98 @@ namespace rby1_ros2{
         const std::shared_ptr<rby1_msgs::srv::StateOnOff::Request> request,
         std::shared_ptr<rby1_msgs::srv::StateOnOff::Response> response) {
         std::lock_guard<std::mutex> lock(mutex_);
-        collision_safety_enable_ = request->state;
+        collision_recovery_enable_ = request->state;
         response->success = true;
-        response->message = std::string("Collision safety ") + (collision_safety_enable_ ? "enabled" : "disabled") + ".";
-        RCLCPP_INFO(this->get_logger(), "Collision safety set to %s", collision_safety_enable_ ? "ON" : "OFF");
+        response->message = std::string("Collision recovery ") + (collision_recovery_enable_ ? "enabled" : "disabled") + ".";
+        RCLCPP_INFO(this->get_logger(), "Collision recovery set to %s", collision_recovery_enable_ ? "ON" : "OFF");
+    }
+
+    template <typename ModelType>
+    int RBY1_ROS2_DRIVER<ModelType>::get_link_index(const std::string& name) {
+        auto it = std::find(dyn_link_names_.begin(), dyn_link_names_.end(), name);
+        if (it != dyn_link_names_.end()) {
+            return std::distance(dyn_link_names_.begin(), it);
+        }
+        return -1;
+    }
+
+    template <typename ModelType>
+    std::optional<std::string> RBY1_ROS2_DRIVER<ModelType>::get_predicted_collision_reason(const Eigen::VectorXd& target_q) {
+        if (!dynamics_ || !dyn_state_) {
+            return std::nullopt;
+        }
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto temp_state = std::make_shared<rb::dyn::State<ModelType::kRobotDOF>>(*dyn_state_);
+        temp_state->SetQ(target_q);
+
+        dynamics_->ComputeForwardKinematics(temp_state);
+        auto cols = dynamics_->DetectCollisionsOrNearestLinks(temp_state, 20);
+
+        for (const auto& col : cols) {
+            if (col.distance < collision_threshold_) {
+                std::stringstream ss;
+                ss << "Collision predicted between [" << col.link1 << "] and [" << col.link2 
+                   << "] (distance: " << std::fixed << std::setprecision(4) << col.distance 
+                   << " m < threshold: " << collision_threshold_ << " m)";
+                return ss.str();
+            }
+        }
+        return std::nullopt;
+    }
+
+    template <typename ModelType>
+    std::optional<Eigen::VectorXd> RBY1_ROS2_DRIVER<ModelType>::solve_cartesian_ik(
+        const std::vector<typename rb::OptimalControl<ModelType::kRobotDOF>::LinkTarget>& link_targets) {
+        
+        if (!dynamics_ || !dyn_state_) {
+            return std::nullopt;
+        }
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        
+        // Clone current state as starting position for numerical IK
+        auto temp_state = std::make_shared<rb::dyn::State<ModelType::kRobotDOF>>(*dyn_state_);
+
+        // Setup OptimalControl solver
+        std::vector<unsigned int> joint_idx(ModelType::kRobotDOF);
+        std::iota(joint_idx.begin(), joint_idx.end(), 0);
+        rb::OptimalControl<ModelType::kRobotDOF> ik_solver(dynamics_, joint_idx);
+
+        double dt = 0.1;
+        int max_iterations = 50;
+        double tolerance = 1e-3;
+        bool converged = false;
+
+        typename rb::OptimalControl<ModelType::kRobotDOF>::Input in;
+        in.link_targets = link_targets;
+
+        Eigen::Vector<double, ModelType::kRobotDOF> q_lb = q_lower_;
+        Eigen::Vector<double, ModelType::kRobotDOF> q_ub = q_upper_;
+        Eigen::Vector<double, ModelType::kRobotDOF> qdot_ub = qdot_upper_;
+        Eigen::Vector<double, ModelType::kRobotDOF> qddot_ub = qddot_upper_;
+
+        for (int iter = 0; iter < max_iterations; ++iter) {
+            auto sol = ik_solver.Solve(in, temp_state, dt, 1.0, q_lb, q_ub, qdot_ub, qddot_ub, true);
+            if (!sol.has_value()) {
+                break;
+            }
+
+            // Step joint angles
+            Eigen::VectorXd q_next = temp_state->GetQ() + sol.value() * dt;
+            temp_state->SetQ(q_next);
+            temp_state->SetQdot(sol.value());
+
+            if (ik_solver.GetError() < tolerance) {
+                converged = true;
+                break;
+            }
+        }
+
+        if (converged) {
+            return temp_state->GetQ();
+        }
+        return std::nullopt;
     }
 
     // Explicit template instantiations

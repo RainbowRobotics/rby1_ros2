@@ -67,24 +67,25 @@ Because the workspace was built with `--symlink-install`, **no rebuild is needed
 > For simulation testing, keep `robot_ip: "127.0.0.1:50051"`.  
 > Some state values (battery, tool flange FT/IMU) will show zeros in simulation because no physical sensors are attached.
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `robot_ip` | `"127.0.0.1:50051"` | Robot IP address and gRPC port |
-| `model` | `"m"` | Robot model — `"a"` (RBY1-A) or `"m"` (RBY1-M) |
-| `get_state_period` | `0.01` | State publish interval (seconds) — default 100 Hz |
-| `minimum_time` | `2.0` | Default minimum execution time for motion commands (seconds) |
-| `angular_velocity_limit` | `4.712` | Joint angular velocity limit (rad/s) |
-| `linear_velocity_limit` | `1.5` | Cartesian linear velocity limit (m/s) |
-| `acceleration_limit` | `1.0` | Acceleration scaling factor |
-| `se2_minimum_time` | `1.0` | Minimum execution time (interpolation ramp) for SE2 velocity commands (seconds) |
-| `se2_linear_acceleration_limit` | `0.5` | Linear acceleration limit for SE2 velocity commands |
-| `se2_angular_acceleration_limit` | `0.5` | Angular acceleration limit for SE2 velocity commands |
-| `fault_reset_trigger` | `true` | Auto-reset MAJOR/MINOR fault on driver startup |
-| `node_power_off_trigger` | `false` | Power off robot automatically when driver node exits |
-| `collision_safety_enable` | `false` | Enable automatic retreat to initial pose on collision |
-| `collision_threshold` | `0.01` | Collision detection distance threshold (meters) |
-| `publish_battery_state` | `true` | Enable battery state topic |
-| `publish_tool_flange_state` | `true` | Enable tool flange state topics (left + right) |
+| Parameter | Default | Unit | Description |
+|-----------|---------|------|-------------|
+| `robot_ip` | `"127.0.0.1:50051"` | - | Robot IP address and gRPC port |
+| `model` | `"m"` | - | Robot model — `"a"` (RBY1-A) or `"m"` (RBY1-M) |
+| `get_state_period` | `0.01` | s | State publish interval — default 100 Hz |
+| `minimum_time` | `2.0` | s | Default minimum execution time for motion commands |
+| `angular_velocity_limit` | `4.712` | rad/s | Joint angular velocity limit |
+| `linear_velocity_limit` | `1.5` | m/s | Cartesian linear velocity limit |
+| `acceleration_limit` | `1.0` | - | Acceleration scaling factor |
+| `se2_minimum_time` | `1.0` | s | Minimum execution time (interpolation ramp) for SE2 velocity commands |
+| `se2_linear_acceleration_limit` | `0.5` | m/s² | Linear acceleration limit for SE2 velocity commands |
+| `se2_angular_acceleration_limit` | `0.5` | rad/s² | Angular acceleration limit for SE2 velocity commands |
+| `fault_reset_trigger` | `true` | - | Auto-reset MAJOR/MINOR fault on driver startup |
+| `node_power_off_trigger` | `false` | - | Power off robot automatically when driver node exits |
+| `collision_recovery_enable` | `false` | - | Enable automatic retreat to initial pose on collision |
+| `collision_check_enable` | `false` | - | Enable predictive collision checking before initiating motion |
+| `collision_threshold` | `0.01` | m | Collision detection distance threshold |
+| `publish_battery_state` | `true` | - | Enable battery state topic |
+| `publish_tool_flange_state` | `true` | - | Enable tool flange state topics (left + right) |
 
 ---
 
