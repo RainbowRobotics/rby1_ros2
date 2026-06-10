@@ -73,7 +73,6 @@ namespace rby1_ros2{
             std::string servo_list_str;
             std::string power_list_str;
             bool fault_reset_trigger;
-            bool node_power_off_trigger_;
             double collision_threshold_{0.03};
             bool publish_battery_state_{false};
             bool publish_tool_flange_state_{false};

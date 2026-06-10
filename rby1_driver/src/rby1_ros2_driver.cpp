@@ -101,6 +101,12 @@ namespace rby1_ros2{
                     tool_flange_left_pub_ = this->create_publisher<rby1_msgs::msg::ToolFlangeState>("tool_flange/left", 10);
                     tool_flange_right_pub_ = this->create_publisher<rby1_msgs::msg::ToolFlangeState>("tool_flange/right", 10);
                 }
+
+                odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("odom", 10);
+                tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+                cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
+                    "cmd_vel", 10, std::bind(&RBY1_ROS2_DRIVER<ModelType>::cmd_vel_callback, this, _1));
+
                 // loop for reading joint state
                 // loop for reading joint state
                 joint_state_timer_ = this->create_wall_timer(std::chrono::milliseconds(static_cast<int>(robot_parameter_.get_state_period*1000.0)), std::bind(&RBY1_ROS2_DRIVER<ModelType>::read_joint_state, this));
@@ -128,10 +134,7 @@ namespace rby1_ros2{
                 stream_control_service_ = this->create_service<rby1_msgs::srv::StateOnOff>(
                     "stream_control", std::bind(&RBY1_ROS2_DRIVER<ModelType>::stream_control_callback, this, _1, _2));
  
-                odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("odom", 10);
-                tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
-                cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
-                    "cmd_vel", 10, std::bind(&RBY1_ROS2_DRIVER<ModelType>::cmd_vel_callback, this, _1));
+                
  
                 /* we need to add tool flange on/off service*/
  
@@ -190,7 +193,6 @@ namespace rby1_ros2{
         this->declare_parameter<double>("se2_angular_acceleration_limit", 0.5);
         
         this->declare_parameter<bool>("fault_reset_trigger", true);
-        this->declare_parameter<bool>("node_power_off_trigger", false);
         this->declare_parameter<double>("collision_threshold", 0.01);
         this->declare_parameter<bool>("publish_battery_state", true);
         this->declare_parameter<bool>("publish_tool_flange_state", true);
@@ -217,7 +219,6 @@ namespace rby1_ros2{
         this->get_parameter("se2_linear_acceleration_limit", robot_parameter_.se2_linear_acceleration_limit);
         this->get_parameter("se2_angular_acceleration_limit", robot_parameter_.se2_angular_acceleration_limit);
         this->get_parameter("fault_reset_trigger", fault_reset_trigger);
-        this->get_parameter("node_power_off_trigger", node_power_off_trigger_);
         this->get_parameter("collision_threshold", collision_threshold_);
         this->get_parameter("publish_battery_state", publish_battery_state_);
         this->get_parameter("publish_tool_flange_state", publish_tool_flange_state_);
@@ -802,6 +803,8 @@ namespace rby1_ros2{
             robot_state_msg.center_of_mass[0] = state.center_of_mass[0];
             robot_state_msg.center_of_mass[1] = state.center_of_mass[1];
             robot_state_msg.center_of_mass[2] = state.center_of_mass[2];
+
+            robot_state_msg.robot_stream_state = stream_active_;
 
             robot_state_pub_->publish(robot_state_msg);
 
@@ -2175,18 +2178,23 @@ namespace rby1_ros2{
     template <typename ModelType>
     void RBY1_ROS2_DRIVER<ModelType>::cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg) {
         try {
-            double linear_y = msg->linear.y;
-            Eigen::Vector2d linear_vel(msg->linear.x, linear_y);
-            double angular_vel = msg->angular.z;
+            {
+                std::lock_guard<std::mutex> lock(stream_mutex_);
+                if (!stream_active_ || !stream_handler_) {
+                    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                                         "cmd_vel received but stream control is not active. Ignoring command.");
+                    return;
+                }
+            }
+
+            Eigen::Vector2d linear_vel(msg->linear.x, msg->linear.y);
+            Eigen::Vector2d acceleration_limit(robot_parameter_.se2_linear_acceleration_limit, robot_parameter_.se2_linear_acceleration_limit);
 
             rb::SE2VelocityCommandBuilder se2_cmd;
-            se2_cmd.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(0.5));
+            se2_cmd.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(1.0));
             se2_cmd.SetMinimumTime(robot_parameter_.se2_minimum_time);
-            se2_cmd.SetVelocity(linear_vel, angular_vel);
-            se2_cmd.SetAccelerationLimit(
-                Eigen::Vector2d(robot_parameter_.se2_linear_acceleration_limit, robot_parameter_.se2_linear_acceleration_limit),
-                robot_parameter_.se2_angular_acceleration_limit
-            );
+            se2_cmd.SetVelocity(linear_vel, msg->angular.z);
+            se2_cmd.SetAccelerationLimit(acceleration_limit, robot_parameter_.se2_angular_acceleration_limit);
 
             rb::MobilityCommandBuilder mobility_cmd;
             mobility_cmd.SetCommand(se2_cmd);
@@ -2197,7 +2205,12 @@ namespace rby1_ros2{
             rb::RobotCommandBuilder robot_cmd;
             robot_cmd.SetCommand(component_cmd);
 
-            robot_->SendCommand(robot_cmd);
+            {
+                std::lock_guard<std::mutex> lock(stream_mutex_);
+                if (stream_handler_) {
+                    stream_handler_->SendCommand(robot_cmd);
+                }
+            }
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Exception in cmd_vel_callback: %s", e.what());
         }

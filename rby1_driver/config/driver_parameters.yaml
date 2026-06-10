@@ -2,7 +2,10 @@
   ros__parameters:
     # RBY1 initialize Information
     robot_ip: "127.0.0.1:50051"
-    model: "m" # A or M , a or m
+    model: "a" # A or M , a or m
+
+    # power on & servo on & enable when you launch ros2_driver
+    initialize_robot: false
 
     # power on
     power_on: ["all"] # example: ["5"], ["12,24,48"] , ["all"]
@@ -11,7 +14,7 @@
     servo_on: ["all"] # example: ["torso"], ["right_arm, left_arm"] ,["right_arm_1, left_arm_3"], ["all"]
 
     # drive parameters
-    get_state_period: 0.01 # seconds
+    get_state_period: 0.01 # 0.01 # seconds
     minimum_time: 2.0 # seconds
     angular_velocity_limit: 4.712388 # 3.141592 * 1.5
     linear_velocity_limit: 1.5
@@ -27,7 +30,6 @@
 
     # additional options
     fault_reset_trigger: false 
-    node_power_off_trigger: false
     
     # Collision options
     collision_recovery_enable: true

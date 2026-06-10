@@ -158,11 +158,11 @@ hardware_interface::CallbackReturn RBY1SystemHardware::on_activate(const rclcpp_
   // Power On and Servo On
   std::string power_dev = "all";
   std::string servo_dev = "all";
-  auto power_dev_it = info_.hardware_parameters.find("power_on_device");
+  auto power_dev_it = info_.hardware_parameters.find("power_on");
   if (power_dev_it != info_.hardware_parameters.end()) {
     power_dev = power_dev_it->second;
   }
-  auto servo_dev_it = info_.hardware_parameters.find("servo_on_device");
+  auto servo_dev_it = info_.hardware_parameters.find("servo_on");
   if (servo_dev_it != info_.hardware_parameters.end()) {
     servo_dev = servo_dev_it->second;
   }
@@ -223,7 +223,7 @@ hardware_interface::CallbackReturn RBY1SystemHardware::on_deactivate(const rclcp
     
     // Disable Servos
     std::string servo_dev = "all";
-    auto servo_dev_it = info_.hardware_parameters.find("servo_on_device");
+    auto servo_dev_it = info_.hardware_parameters.find("servo_on");
     if (servo_dev_it != info_.hardware_parameters.end()) {
       servo_dev = servo_dev_it->second;
     }
