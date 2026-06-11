@@ -3,6 +3,8 @@
 > [!CAUTION]
 > ## The current driver is in beta. For safe use, please test the features in a simulation first.
 > Please note that package contents, APIs, topics, and parameters may change continuously during the beta period.
+> ## The moveit and hardware packages are currently under development. 
+> Please note that they are not available for use.
 
 ## Overview
 
