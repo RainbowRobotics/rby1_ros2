@@ -82,7 +82,7 @@ Because the workspace was built with `--symlink-install`, **no rebuild is needed
 | `fault_reset_trigger` | `true` | - | Auto-reset MAJOR/MINOR fault on driver startup |
 | `node_power_off_trigger` | `false` | - | Power off robot automatically when driver node exits |
 | `collision_recovery_enable` | `false` | - | Enable automatic retreat to initial pose on collision detection |
-| `collision_check_enable` | `false` | - | Enable predictive collision checking before executing any motion command |
+| `Pre_collision_detection_enable` | `false` | - | Enable predictive collision checking before executing any motion command |
 | `collision_threshold` | `0.01` | m | Minimum link-distance threshold for collision detection (always active) |
 | `publish_battery_state` | `true` | - | Enable battery state topic |
 | `publish_tool_flange_state` | `true` | - | Enable tool flange state topics (left + right) |
@@ -95,7 +95,7 @@ Because the workspace was built with `--symlink-install`, **no rebuild is needed
 > For example, `0.01 s` → approximately **100 Hz** publishing rate.  
 > Actual throughput may be slightly lower (97–100 Hz) depending on PC environment and CPU load.
 >
-> This period also directly affects **predictive collision checking** (`collision_check_enable`): the driver evaluates whether a commanded target pose would cause a collision at this same rate. If `get_state_period` is slow (e.g. `0.1 s`), collision pre-checks will also be evaluated at 10 Hz, potentially allowing a collision-bound command to slip through before the check fires.
+> This period also directly affects **predictive collision checking** (`Pre_collision_detection_enable`): the driver evaluates whether a commanded target pose would cause a collision at this same rate. If `get_state_period` is slow (e.g. `0.1 s`), collision pre-checks will also be evaluated at 10 Hz, potentially allowing a collision-bound command to slip through before the check fires.
 
 ![get_state_period_1](Doc/img/topic_hz.png)
 
@@ -265,7 +265,7 @@ ros2 launch rby1_description rby1_state_publisher.launch.py model:=a version:=1_
 #### Always-On Collision Detection
 Self-collision monitoring is **always active** regardless of any parameter settings. The driver monitors link distances reported by the SDK on every state read cycle (`get_state_period`). When the minimum link distance falls below `collision_threshold`, the driver immediately calls `CancelControl()` and closes the stream.
 
-#### Predictive Collision Checking (`collision_check_enable`)
+#### Predictive Collision Checking (`Pre_collision_detection_enable`)
 When enabled in `driver_parameters.yaml`, the driver checks the **target pose** for collisions *before* executing any joint or Cartesian command:
 - **Joint commands**: uses the URDF-based dynamics model to evaluate the target joint configuration for link collisions.
 - **Cartesian commands**: solves the Inverse Kinematics via the built-in optimal control solver to obtain joint angles, then evaluates those angles for collisions.
@@ -274,7 +274,7 @@ When enabled in `driver_parameters.yaml`, the driver checks the **target pose** 
 
 #### Collision Recovery (`collision_recovery_enable`)
 When enabled, the driver automatically retreats to the initial pose when a collision is detected at runtime:
-- Cannot be active simultaneously with `collision_check_enable` (predictive check prevents collisions from occurring in the first place, so recovery is not triggered).
+- Cannot be active simultaneously with `Pre_collision_detection_enable` (predictive check prevents collisions from occurring in the first place, so recovery is not triggered).
 - Can be toggled at runtime via the `set_collision_safety` service.
 
 ---
@@ -321,7 +321,7 @@ When enabled, the driver automatically retreats to the initial pose when a colli
 - **Action Executors**: Each action goal is translated into an SDK `CommandBuilder` command and executed synchronously. Minor faults during execution trigger automatic reset and recovery.
 - **Safety Guard**: All motion commands are rejected unless the Control Manager is in `ENABLE` or `EXECUTING` state.
 - **Collision Detection** (always active): Self-collision is monitored every `get_state_period`. `CancelControl()` and stream close are called automatically if link distance falls below `collision_threshold`.
-- **Predictive Collision Check** (`collision_check_enable`): Before executing a command, the driver evaluates the target joint configuration (or solves IK for Cartesian targets) against the URDF collision model and rejects commands that would lead to a collision.
+- **Predictive Collision Check** (`Pre_collision_detection_enable`): Before executing a command, the driver evaluates the target joint configuration (or solves IK for Cartesian targets) against the URDF collision model and rejects commands that would lead to a collision.
 - **Collision Recovery** (`collision_recovery_enable`): When a collision is detected and this flag is set, the driver automatically retreats the robot to its initial pose. Does not activate if predictive checking is also enabled.
 
 ---

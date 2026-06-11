@@ -21,6 +21,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GetCartesianPose.srv"
   "srv/GravityCompensation.srv"
   "srv/ControlManagerCommand.srv"
+  "srv/SetTrajectoryImpedance.srv"
   "action/Rby1JointCommand.action"
   "action/Rby1CartesianCommand.action"
   "action/StreamPosition.action"

@@ -129,8 +129,9 @@ namespace rby1_ros2{
                 
                 stream_control_service_ = this->create_service<rby1_msgs::srv::StateOnOff>(
                     "stream_control", std::bind(&RBY1_ROS2_DRIVER<ModelType>::stream_control_callback, this, _1, _2));
- 
-                
+
+                set_trajectory_impedance_service_ = this->create_service<rby1_msgs::srv::SetTrajectoryImpedance>(
+                    "set_trajectory_impedance", std::bind(&RBY1_ROS2_DRIVER<ModelType>::set_trajectory_impedance_callback, this, _1, _2));
  
                 /* we need to add tool flange on/off service*/
  
@@ -160,7 +161,101 @@ namespace rby1_ros2{
                 }
 
                 if (robot_initialize_flag){
-                    
+                    RCLCPP_INFO(this->get_logger(), "[INITIALIZE] initialize_robot is true. Starting automatic power/servo initialization...");
+
+                    // --- Power ON (mirrors power_control service logic) ---
+                    {
+                        // Build power_list_str from robot_parameter_.power_on_list
+                        std::string power_list_str;
+                        if (address == "127.0.0.1:50051") {
+                            power_list_str = ".*";
+                        } else {
+                            const auto& plist = robot_parameter_.power_on_list;
+                            for (size_t i = 0; i < plist.size(); i++) {
+                                if (plist[i] == "all" || plist[i] == ".*") {
+                                    power_list_str = ".*";
+                                    break;
+                                }
+                                power_list_str += plist[i];
+                                if (plist[i].find('v') == std::string::npos && plist[i] != ".*") {
+                                    power_list_str += "v";
+                                }
+                                if (i != plist.size() - 1) {
+                                    power_list_str += "|";
+                                }
+                            }
+                        }
+
+                        if (robot_->IsPowerOn(power_list_str)) {
+                            RCLCPP_INFO(this->get_logger(), "[INITIALIZE] Power is already ON [%s], skipping.", power_list_str.c_str());
+                        } else {
+                            RCLCPP_INFO(this->get_logger(), "[INITIALIZE] Power ON [%s]...", power_list_str.c_str());
+                            if (!robot_->PowerOn(power_list_str)) {
+                                RCLCPP_ERROR(this->get_logger(), "[INITIALIZE] Failed to power on [%s]. Aborting initialization.", power_list_str.c_str());
+                                throw std::runtime_error("[INITIALIZE] PowerOn failed during robot initialization.");
+                            }
+                            RCLCPP_INFO(this->get_logger(), "[INITIALIZE] Power ON succeeded.");
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                        }
+                    }
+
+                    // --- Servo ON (mirrors servo_control service logic) ---
+                    {
+                        // Build servo_list_str from robot_parameter_.servo_on_list
+                        std::string servo_list_str;
+                        const auto& slist = robot_parameter_.servo_on_list;
+                        for (size_t i = 0; i < slist.size(); i++) {
+                            const std::string& name = slist[i];
+                            if (name == "right")       servo_list_str += "^right_arm_.*";
+                            else if (name == "left")   servo_list_str += "^left_arm_.*";
+                            else if (name == "head")   servo_list_str += "^head_.*";
+                            else if (name == "torso")  servo_list_str += "^torso_.*";
+                            else if (name == "all") {
+                                servo_list_str = ".*";
+                                break;
+                            } else {
+                                servo_list_str += name;
+                            }
+                            if (i != slist.size() - 1) {
+                                servo_list_str += "|";
+                            }
+                        }
+
+                        bool already_on = false;
+                        try {
+                            if (robot_->IsServoOn(servo_list_str)) already_on = true;
+                        } catch (...) {}
+                        if (robot_->GetControlManagerState().state == rb::ControlManagerState::State::kEnabled) {
+                            already_on = true;
+                        }
+
+                        if (already_on) {
+                            RCLCPP_INFO(this->get_logger(), "[INITIALIZE] Servo is already ON [%s], skipping.", servo_list_str.c_str());
+                            check_controll_manager();
+                        } else {
+                            RCLCPP_INFO(this->get_logger(), "[INITIALIZE] Servo ON [%s]...", servo_list_str.c_str());
+                            if (!robot_->ServoOn(servo_list_str)) {
+                                RCLCPP_ERROR(this->get_logger(), "[INITIALIZE] SDK ServoOn failed for [%s]. Aborting initialization.", servo_list_str.c_str());
+                                throw std::runtime_error("[INITIALIZE] ServoOn failed during robot initialization.");
+                            }
+                            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+                            { // sync info
+                                std::lock_guard<std::mutex> lock(mutex_);
+                                info_ = robot_->GetRobotInfo();
+                                resize_joint_states();
+                            }
+
+                            RCLCPP_INFO(this->get_logger(), "[INITIALIZE] Checking Control Manager after Servo ON...");
+                            if (!check_controll_manager()) {
+                                RCLCPP_ERROR(this->get_logger(), "[INITIALIZE] Control Manager check failed after Servo ON.");
+                                throw std::runtime_error("[INITIALIZE] Control Manager failed after ServoOn during robot initialization.");
+                            }
+                            RCLCPP_INFO(this->get_logger(), "[INITIALIZE] Servo ON and Control Manager ready.");
+                        }
+                    }
+
+                    RCLCPP_INFO(this->get_logger(), "[INITIALIZE] Robot initialization complete.");
                 }
             }
             catch (const std::exception& e) {
@@ -198,7 +293,7 @@ namespace rby1_ros2{
         this->declare_parameter<bool>("publish_battery_state", true);
         this->declare_parameter<bool>("publish_tool_flange_state", true);
         this->declare_parameter<bool>("collision_recovery_enable", false);
-        this->declare_parameter<bool>("collision_check_enable", false);
+        this->declare_parameter<bool>("Pre_collision_detection", false);
         
         this->get_parameter("robot_ip", address);
         this->get_parameter("model", model);
@@ -225,7 +320,7 @@ namespace rby1_ros2{
         this->get_parameter("publish_battery_state", publish_battery_state_);
         this->get_parameter("publish_tool_flange_state", publish_tool_flange_state_);
         this->get_parameter("collision_recovery_enable", collision_recovery_enable_);
-        this->get_parameter("collision_check_enable", collision_check_enable_);
+        this->get_parameter("Pre_collision_detection", Pre_collision_detection_);
         collision_enable_ = true;
 
 
@@ -1002,7 +1097,7 @@ namespace rby1_ros2{
         }
 
         // Collision check for trajectory waypoints
-        if (collision_check_enable_ && dynamics_ && dyn_state_) {
+        if (Pre_collision_detection_ && dynamics_ && dyn_state_) {
             for (size_t i = 0; i < trajectory.points.size(); ++i) {
                 const auto& point = trajectory.points[i];
                 Eigen::Vector<double, ModelType::kRobotDOF> target_q = Eigen::Vector<double, ModelType::kRobotDOF>::Zero();
@@ -1112,32 +1207,91 @@ namespace rby1_ros2{
 
                 Eigen::VectorXd torso_q(info_.torso_joint_idx.size());
                 for (size_t k = 0; k < info_.torso_joint_idx.size(); ++k) torso_q[k] = q[info_.torso_joint_idx[k]];
-                rb::TorsoCommandBuilder torso_builder;
-                torso_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(torso_q).SetMinimumTime(cmd_min_time));
 
                 Eigen::VectorXd right_arm_q(info_.right_arm_joint_idx.size());
                 for (size_t k = 0; k < info_.right_arm_joint_idx.size(); ++k) right_arm_q[k] = q[info_.right_arm_joint_idx[k]];
-                rb::ArmCommandBuilder right_arm_builder;
-                right_arm_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(right_arm_q).SetMinimumTime(cmd_min_time));
 
                 Eigen::VectorXd left_arm_q(info_.left_arm_joint_idx.size());
                 for (size_t k = 0; k < info_.left_arm_joint_idx.size(); ++k) left_arm_q[k] = q[info_.left_arm_joint_idx[k]];
-                rb::ArmCommandBuilder left_arm_builder;
-                left_arm_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(left_arm_q).SetMinimumTime(cmd_min_time));
 
                 Eigen::VectorXd head_q(info_.head_joint_idx.size());
                 for (size_t k = 0; k < info_.head_joint_idx.size(); ++k) head_q[k] = q[info_.head_joint_idx[k]];
-                rb::HeadCommandBuilder head_builder;
-                head_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(head_q).SetMinimumTime(cmd_min_time));
 
                 rb::BodyComponentBasedCommandBuilder body_comp_builder;
-                body_comp_builder.SetTorsoCommand(torso_builder);
-                body_comp_builder.SetRightArmCommand(right_arm_builder);
-                body_comp_builder.SetLeftArmCommand(left_arm_builder);
-
                 rb::ComponentBasedCommandBuilder comp_builder;
+
+                if (trajectory_impedance_enabled_) {
+                    // --- Impedance mode ---
+                    // JointImpedanceControlCommandBuilder is move-only (copy ctor deleted),
+                    // so each part must be built inline without a helper lambda.
+                    size_t torso_dof = info_.torso_joint_idx.size();
+                    size_t right_dof = info_.right_arm_joint_idx.size();
+                    size_t left_dof  = info_.left_arm_joint_idx.size();
+
+                    // Helper to slice stiffness from the stored full-body vector (fallback to 100.0)
+                    auto make_stiffness = [&](size_t offset, size_t dof) -> Eigen::VectorXd {
+                        if (trajectory_stiffness_.size() >= offset + dof) {
+                            return Eigen::Map<const Eigen::VectorXd>(trajectory_stiffness_.data() + offset, dof);
+                        }
+                        return Eigen::VectorXd::Constant(dof, 100.0);
+                    };
+
+                    // Torso
+                    {
+                        auto b = rb::JointImpedanceControlCommandBuilder();
+                        b.SetPosition(torso_q);
+                        b.SetMinimumTime(cmd_min_time);
+                        b.SetStiffness(make_stiffness(0, torso_dof));
+                        b.SetDampingRatio(trajectory_damping_ratio_);
+                        b.SetTorqueLimit(Eigen::VectorXd::Constant(torso_dof, trajectory_torque_limit_));
+                        body_comp_builder.SetTorsoCommand(rb::TorsoCommandBuilder(std::move(b)));
+                    }
+                    // Right arm
+                    {
+                        auto b = rb::JointImpedanceControlCommandBuilder();
+                        b.SetPosition(right_arm_q);
+                        b.SetMinimumTime(cmd_min_time);
+                        b.SetStiffness(make_stiffness(torso_dof, right_dof));
+                        b.SetDampingRatio(trajectory_damping_ratio_);
+                        b.SetTorqueLimit(Eigen::VectorXd::Constant(right_dof, trajectory_torque_limit_));
+                        body_comp_builder.SetRightArmCommand(rb::ArmCommandBuilder(std::move(b)));
+                    }
+                    // Left arm
+                    {
+                        auto b = rb::JointImpedanceControlCommandBuilder();
+                        b.SetPosition(left_arm_q);
+                        b.SetMinimumTime(cmd_min_time);
+                        b.SetStiffness(make_stiffness(torso_dof + right_dof, left_dof));
+                        b.SetDampingRatio(trajectory_damping_ratio_);
+                        b.SetTorqueLimit(Eigen::VectorXd::Constant(left_dof, trajectory_torque_limit_));
+                        body_comp_builder.SetLeftArmCommand(rb::ArmCommandBuilder(std::move(b)));
+                    }
+                    // Head does not support impedance — fall back to position control
+                    rb::HeadCommandBuilder head_builder;
+                    head_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(head_q).SetMinimumTime(cmd_min_time));
+                    comp_builder.SetHeadCommand(head_builder);
+                } else {
+                    // --- Default position control mode ---
+                    rb::TorsoCommandBuilder torso_builder;
+                    torso_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(torso_q).SetMinimumTime(cmd_min_time));
+
+                    rb::ArmCommandBuilder right_arm_builder;
+                    right_arm_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(right_arm_q).SetMinimumTime(cmd_min_time));
+
+                    rb::ArmCommandBuilder left_arm_builder;
+                    left_arm_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(left_arm_q).SetMinimumTime(cmd_min_time));
+
+                    rb::HeadCommandBuilder head_builder;
+                    head_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(head_q).SetMinimumTime(cmd_min_time));
+
+                    body_comp_builder.SetTorsoCommand(torso_builder);
+                    body_comp_builder.SetRightArmCommand(right_arm_builder);
+                    body_comp_builder.SetLeftArmCommand(left_arm_builder);
+                    comp_builder.SetHeadCommand(head_builder);
+                }
+
+
                 comp_builder.SetBodyCommand(rb::BodyCommandBuilder(std::move(body_comp_builder)));
-                comp_builder.SetHeadCommand(head_builder);
 
                 {
                     std::lock_guard<std::mutex> lock(stream_mutex_);
@@ -1319,7 +1473,7 @@ namespace rby1_ros2{
                 return;
             }
 
-            if (collision_check_enable_) {
+            if (Pre_collision_detection_) {
                 Eigen::Vector<double, ModelType::kRobotDOF> target_q = Eigen::Vector<double, ModelType::kRobotDOF>::Zero();
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
@@ -1763,7 +1917,7 @@ namespace rby1_ros2{
                 return;
             }
 
-            if (collision_check_enable_) {
+            if (Pre_collision_detection_) {
                 std::vector<typename rb::OptimalControl<ModelType::kRobotDOF>::LinkTarget> link_targets;
                 
                 auto add_target_helper = [&](const rby1_msgs::msg::CartesianCommand& cmd) -> bool {
@@ -2281,6 +2435,55 @@ namespace rby1_ros2{
             RCLCPP_INFO(this->get_logger(), "Persistent stream control deactivated.");
         }
     }
+
+    template <typename ModelType>
+    void RBY1_ROS2_DRIVER<ModelType>::set_trajectory_impedance_callback(
+        const std::shared_ptr<rby1_msgs::srv::SetTrajectoryImpedance::Request> request,
+        std::shared_ptr<rby1_msgs::srv::SetTrajectoryImpedance::Response> response) {
+
+        if (!request->state) {
+            trajectory_impedance_enabled_ = false;
+            response->success = true;
+            response->message = "Trajectory impedance control disabled. follow_joint_trajectory will use position control.";
+            RCLCPP_INFO(this->get_logger(), "[TRAJECTORY IMPEDANCE] Disabled.");
+            return;
+        }
+
+        // Validate stiffness size when provided
+        if (!request->stiffness.empty()) {
+            size_t expected = info_.torso_joint_idx.size() +
+                              info_.right_arm_joint_idx.size() +
+                              info_.left_arm_joint_idx.size() +
+                              info_.head_joint_idx.size();
+            if (request->stiffness.size() != expected) {
+                response->success = false;
+                response->message = "Invalid stiffness size: expected " + std::to_string(expected) +
+                                    " (torso+right+left+head), got " + std::to_string(request->stiffness.size());
+                RCLCPP_ERROR(this->get_logger(), "[TRAJECTORY IMPEDANCE] %s", response->message.c_str());
+                return;
+            }
+            trajectory_stiffness_ = request->stiffness;
+        } else {
+            // Default: 100.0 for all joints
+            size_t total = info_.torso_joint_idx.size() +
+                           info_.right_arm_joint_idx.size() +
+                           info_.left_arm_joint_idx.size() +
+                           info_.head_joint_idx.size();
+            trajectory_stiffness_.assign(total, 100.0);
+        }
+
+        trajectory_damping_ratio_ = (request->damping_ratio > 0.0) ? request->damping_ratio : 1.0;
+        trajectory_torque_limit_  = (request->torque_limit  > 0.0) ? request->torque_limit  : 10.0;
+        trajectory_impedance_enabled_ = true;
+
+        response->success = true;
+        response->message = "Trajectory impedance enabled. stiffness[" +
+                            std::to_string(trajectory_stiffness_.size()) + " joints], damping=" +
+                            std::to_string(trajectory_damping_ratio_) + ", torque_limit=" +
+                            std::to_string(trajectory_torque_limit_);
+        RCLCPP_INFO(this->get_logger(), "[TRAJECTORY IMPEDANCE] Enabled. %s", response->message.c_str());
+    }
+
 
     template <typename ModelType>
     void RBY1_ROS2_DRIVER<ModelType>::execute_collision_safety_retreat() {

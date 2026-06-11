@@ -21,6 +21,7 @@
 #include "rby1_msgs/srv/get_cartesian_pose.hpp"
 #include "rby1_msgs/srv/gravity_compensation.hpp"
 #include "rby1_msgs/srv/control_manager_command.hpp"
+#include "rby1_msgs/srv/set_trajectory_impedance.hpp"
 #include "rby1_msgs/action/rby1_joint_command.hpp"
 #include "rby1_msgs/action/rby1_cartesian_command.hpp"
 #include "std_msgs/msg/int32.hpp"
@@ -108,7 +109,7 @@ namespace rby1_ros2{
             bool stream_active_{false};
             bool collision_enable_{true};
             bool collision_recovery_enable_{false};
-            bool collision_check_enable_{false};
+            bool Pre_collision_detection_{false};
             std::atomic<bool> is_controlling_{false};
             std::atomic<bool> is_recovering_{false};
             bool has_initial_pose_{false};
@@ -139,6 +140,13 @@ namespace rby1_ros2{
             // rclcpp::Service<rby1_msgs::srv::StateOnOff>::SharedPtr motor_brake_service_;
             rclcpp::Service<rby1_msgs::srv::StateOnOff>::SharedPtr collision_safety_service_;
             rclcpp::Service<rby1_msgs::srv::StateOnOff>::SharedPtr stream_control_service_;
+            rclcpp::Service<rby1_msgs::srv::SetTrajectoryImpedance>::SharedPtr set_trajectory_impedance_service_;
+
+            // Impedance state for follow_joint_trajectory
+            bool   trajectory_impedance_enabled_{false};
+            std::vector<double> trajectory_stiffness_;    // full joint order: torso+right+left+head
+            double trajectory_damping_ratio_{1.0};
+            double trajectory_torque_limit_{10.0};
 
             void gravity_compensation_callback(const std::shared_ptr<rby1_msgs::srv::GravityCompensation::Request> request,
                                                std::shared_ptr<rby1_msgs::srv::GravityCompensation::Response> response);
@@ -150,6 +158,9 @@ namespace rby1_ros2{
                                            std::shared_ptr<rby1_msgs::srv::StateOnOff::Response> response);
             void stream_control_callback(const std::shared_ptr<rby1_msgs::srv::StateOnOff::Request> request,
                                          std::shared_ptr<rby1_msgs::srv::StateOnOff::Response> response);
+            void set_trajectory_impedance_callback(
+                const std::shared_ptr<rby1_msgs::srv::SetTrajectoryImpedance::Request> request,
+                std::shared_ptr<rby1_msgs::srv::SetTrajectoryImpedance::Response> response);
             void cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg);
             
             geometry_msgs::msg::Pose matrix_to_pose(const Eigen::Matrix4d& matrix);

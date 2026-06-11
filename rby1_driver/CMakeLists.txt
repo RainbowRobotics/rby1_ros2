@@ -65,7 +65,7 @@ target_link_directories(rby1_ros2_driver PRIVATE ${RBY1_SDK_PATH}/build/src)
 target_link_libraries(rby1_ros2_driver
   rby1-sdk
 )
-
+target_compile_options(rby1_ros2_driver PRIVATE -Wno-maybe-uninitialized)
 install(TARGETS
   rby1_ros2_driver
   DESTINATION lib/${PROJECT_NAME}
@@ -89,3 +89,5 @@ install(DIRECTORY config
 
 
 ament_package() 
+
+
