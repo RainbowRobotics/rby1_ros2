@@ -81,13 +81,23 @@ Because the workspace was built with `--symlink-install`, **no rebuild is needed
 | `se2_angular_acceleration_limit` | `0.5` | rad/s² | Angular acceleration limit for SE2 velocity commands |
 | `fault_reset_trigger` | `true` | - | Auto-reset MAJOR/MINOR fault on driver startup |
 | `node_power_off_trigger` | `false` | - | Power off robot automatically when driver node exits |
-| `collision_recovery_enable` | `false` | - | Enable automatic retreat to initial pose on collision |
-| `collision_check_enable` | `false` | - | Enable predictive collision checking before initiating motion |
-| `collision_threshold` | `0.01` | m | Collision detection distance threshold |
+| `collision_recovery_enable` | `false` | - | Enable automatic retreat to initial pose on collision detection |
+| `collision_check_enable` | `false` | - | Enable predictive collision checking before executing any motion command |
+| `collision_threshold` | `0.01` | m | Minimum link-distance threshold for collision detection (always active) |
 | `publish_battery_state` | `true` | - | Enable battery state topic |
 | `publish_tool_flange_state` | `true` | - | Enable tool flange state topics (left + right) |
 
 ---
+
+> [!NOTE]
+> **`get_state_period` and communication frequency:**  
+> `get_state_period` sets the interval (in seconds) at which the driver reads the robot state via `GetState()` and publishes all state topics.  
+> For example, `0.01 s` → approximately **100 Hz** publishing rate.  
+> Actual throughput may be slightly lower (97–100 Hz) depending on PC environment and CPU load.
+>
+> This period also directly affects **predictive collision checking** (`collision_check_enable`): the driver evaluates whether a commanded target pose would cause a collision at this same rate. If `get_state_period` is slow (e.g. `0.1 s`), collision pre-checks will also be evaluated at 10 Hz, potentially allowing a collision-bound command to slip through before the check fires.
+
+![get_state_period_1](Doc/img/topic_hz.png)
 
 ### 1-7. Run Simulator (optional)
 
@@ -143,11 +153,20 @@ ros2 run rby1_examples <example_name>
 | `09_multi_controls` | `ros2 run rby1_examples 09_multi_controls` | Simultaneous joint + Cartesian control per body part |
 | `10_trajectory_joint_command` | `ros2 run rby1_examples 10_trajectory_joint_command` | Streams a pre-computed trajectory via standard FollowJointTrajectory action |
 | `11_cancel_control` | `ros2 run rby1_examples 11_cancel_control` | Demonstrates action cancel and Trigger service cancel |
-| `12_mobile_base_control` | `ros2 run rby1_examples 12_mobile_base_control` | Drives robot wheels via relative cmd_vel Twists |
+| `12_mobile_base_control` | `ros2 run rby1_examples 12_mobile_base_control` | Drives the mobile base via `cmd_vel` while simultaneously commanding upper-body joints — demonstrates mandatory stream activation and priority=1 simultaneous control |
 | `13_stream_command` | `ros2 run rby1_examples 13_stream_command` | Alternates Zero/Ready poses using regular joint commands over persistent stream with varying wait intervals |
 | `14_collision_safety_control` | `ros2 run rby1_examples 14_collision_safety_control` | Enables/disables the automatic retreat to initial safe pose on collision |
 
 ---
+
+> [!IMPORTANT]
+> **Two ways to stop control commands (see Example 11):**
+> 1. **Action cancel** — Cancels only the current action goal. The stream remains open, so subsequent commands can continue immediately.
+> 2. **`cancel_control` service** — Immediately stops all control commands **and forcibly closes the stream** for safety.
+>
+> ⚠️ **If you are using stream-based control (e.g., `cmd_vel`, Example 13), calling `cancel_control` will also shut down the stream.**  
+> You will need to re-open the stream (`/stream_control state: true`) before sending further commands.  
+> If you only want to pause or cancel a specific motion while keeping the stream alive, use the action cancel instead (see Example 13).
 
 ## 2. Visualization & Robot Description (`rby1_description`)
 
@@ -230,16 +249,33 @@ ros2 launch rby1_description rby1_state_publisher.launch.py model:=a version:=1_
 - **Impedance Control**: Both joint and Cartesian modes support impedance control with configurable stiffness and damping.
 - **Gravity Compensation**: Enables back-drivable joints for direct teaching; the driver continuously compensates gravity.
 - **Trajectory Streaming**: Send a pre-computed `JointTrajectory` (multi-waypoint) via the standard `follow_joint_trajectory` action.
+- **Mobile Base + Upper Body Simultaneous Control**: While driving the base via `cmd_vel`, you can also command the arms/head via the `robot_joint` action at the same time. Set `priority = 1` on upper-body goals to match the mobile base's default priority.
 
 ### State Monitoring
 - Joint states (position, velocity, torque) are published at up to 100 Hz per body part.
-- A unified `robot_state` topic provides Control Manager state, brake status, EMO, and CoM in one message.
+- A unified `robot_state` topic provides Control Manager state, brake status, EMO, CoM, and stream open/close status in one message.
 - Optional battery state and per-flange FT/IMU data can be enabled in `driver_parameters.yaml`.
 
 ### Safety & Fault Management
 - Motion commands are rejected if the Control Manager is not in `ENABLE` or `EXECUTING` state.
 - Minor faults encountered during execution are automatically reset and control is resumed.
-- Self-collision detection (optional): automatically calls `CancelControl()` when link distance falls below `collision_threshold`.
+
+### Collision Features
+
+#### Always-On Collision Detection
+Self-collision monitoring is **always active** regardless of any parameter settings. The driver monitors link distances reported by the SDK on every state read cycle (`get_state_period`). When the minimum link distance falls below `collision_threshold`, the driver immediately calls `CancelControl()` and closes the stream.
+
+#### Predictive Collision Checking (`collision_check_enable`)
+When enabled in `driver_parameters.yaml`, the driver checks the **target pose** for collisions *before* executing any joint or Cartesian command:
+- **Joint commands**: uses the URDF-based dynamics model to evaluate the target joint configuration for link collisions.
+- **Cartesian commands**: solves the Inverse Kinematics via the built-in optimal control solver to obtain joint angles, then evaluates those angles for collisions.
+- If the predicted configuration exceeds the threshold, the command is **rejected before execution**.
+- ⚠️ This check runs at the same rate as `get_state_period`. A slow period means the check fires less frequently, potentially delaying rejection of a collision-bound command.
+
+#### Collision Recovery (`collision_recovery_enable`)
+When enabled, the driver automatically retreats to the initial pose when a collision is detected at runtime:
+- Cannot be active simultaneously with `collision_check_enable` (predictive check prevents collisions from occurring in the first place, so recovery is not triggered).
+- Can be toggled at runtime via the `set_collision_safety` service.
 
 ---
 
@@ -284,7 +320,9 @@ ros2 launch rby1_description rby1_state_publisher.launch.py model:=a version:=1_
 - **State Loop**: Calls `GetState()` and `GetControlManagerState()` at `get_state_period` intervals and publishes all state topics.
 - **Action Executors**: Each action goal is translated into an SDK `CommandBuilder` command and executed synchronously. Minor faults during execution trigger automatic reset and recovery.
 - **Safety Guard**: All motion commands are rejected unless the Control Manager is in `ENABLE` or `EXECUTING` state.
-- **Collision Detection**: When `collision_enable: true`, self-collision is monitored and `CancelControl()` is called automatically if distance falls below `collision_threshold`.
+- **Collision Detection** (always active): Self-collision is monitored every `get_state_period`. `CancelControl()` and stream close are called automatically if link distance falls below `collision_threshold`.
+- **Predictive Collision Check** (`collision_check_enable`): Before executing a command, the driver evaluates the target joint configuration (or solves IK for Cartesian targets) against the URDF collision model and rejects commands that would lead to a collision.
+- **Collision Recovery** (`collision_recovery_enable`): When a collision is detected and this flag is set, the driver automatically retreats the robot to its initial pose. Does not activate if predictive checking is also enabled.
 
 ---
 
@@ -331,6 +369,8 @@ The `RobotState.control_manager_state` field (and the `robot_state` topic) uses 
 > - Call `/stream_control` with `state: true` before sending `cmd_vel` commands.
 > - Call `/stream_control` with `state: false` after finishing base control to return to regular position hold.
 > - Attempting to activate `/stream_control` when already active is idempotent; the service will safely log a warning and return success.
+> - ⚠️ **Calling `cancel_control` while using stream-based control will also close the stream.** After `cancel_control`, you must re-open the stream before sending further `cmd_vel` commands. To cancel only the current motion without closing the stream, use the action cancel (see Example 13).
+> - The current stream open/close state is reflected in the `robot_state` topic as `robot_stream_state` (`bool`).
 >
 > ⚙️ = controlled by the corresponding flag in `driver_parameters.yaml`
 
@@ -402,6 +442,7 @@ The `RobotState.control_manager_state` field (and the `robot_state` topic) uses 
 | `tool_flange_state` | `bool[]` | Tool flange connection status `[left, right]` |
 | `emo_state` | `bool` | Emergency Stop pressed status |
 | `center_of_mass` | `float64[3]` | Calculated CoM position `[x, y, z]` in meters |
+| `robot_stream_state` | `bool` | `true` if the persistent command stream is currently open, `false` if closed |
 
 ### `rby1_msgs/ToolFlangeState`
 

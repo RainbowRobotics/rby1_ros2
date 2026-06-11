@@ -65,11 +65,7 @@ namespace rby1_ros2{
                             dyn_joint_names_.push_back(std::string(joint_names[i]));
                         }
                         
-                        //RCLCPP_INFO(this->get_logger(), "=== ROBOT JOINT PHYSICAL LIMITS ===");
-                        // for (size_t i = 0; i < dyn_joint_names_.size(); ++i) {
-                        //     RCLCPP_INFO(this->get_logger(), "Joint [%zu] %s: Pos=[%.3f, %.3f] rad, Vel_Max=%.3f rad/s, Accel_Max=%.3f rad/s^2",
-                        //                 i, dyn_joint_names_[i].c_str(), q_lower_[i], q_upper_[i], qdot_upper_[i], qddot_upper_[i]);
-                        // }
+                        
                     } catch (const std::exception& e) {
                         RCLCPP_WARN(this->get_logger(), "\033[1;33m[DYNAMICS WARNING] Failed to load dynamics model: %s. Cartesian poses and impedance features will be disabled.\033[0m", e.what());
                     }
@@ -162,6 +158,10 @@ namespace rby1_ros2{
                         std::bind(&RBY1_ROS2_DRIVER<ModelType>::handle_rby1_cartesian_cancel, this, _1),
                         std::bind(&RBY1_ROS2_DRIVER<ModelType>::handle_rby1_cartesian_accepted, this, _1));
                 }
+
+                if (robot_initialize_flag){
+                    
+                }
             }
             catch (const std::exception& e) {
                 RCLCPP_ERROR(this->get_logger(), "\033[1;31m[INITIALIZATION ERROR] Exception caught during driver setup: %s\033[0m", e.what());
@@ -178,6 +178,7 @@ namespace rby1_ros2{
         RCLCPP_INFO(this->get_logger(), "Declaring parameters...");
         this->declare_parameter<std::string>("robot_ip", "127.0.0.1:50051");
         this->declare_parameter<std::string>("model", "a");
+        this->declare_parameter<bool>("initialize_robot", false);
         this->declare_parameter<std::vector<std::string>>("power_on", {"all"});
         this->declare_parameter<std::vector<std::string>>("servo_on", {"all"});
 
@@ -206,6 +207,7 @@ namespace rby1_ros2{
         joint_position_topic_name = "robot_joint";
         cartesian_position_topic_name = "robot_cartesian";
  
+        this->get_parameter("initialize_robot", robot_initialize_flag);
         this->get_parameter("power_on", robot_parameter_.power_on_list);
         this->get_parameter("servo_on", robot_parameter_.servo_on_list);
         this->get_parameter("get_state_period", robot_parameter_.get_state_period);
@@ -633,7 +635,10 @@ namespace rby1_ros2{
                     RCLCPP_ERROR(this->get_logger(), "Collision detected! Distance: %.4f (Links: %s <-> %s).", 
                                  min_dist, link1.c_str(), link2.c_str());
                     
-                    robot_->CancelControl();
+                    if(!is_recovering_){
+                        robot_->CancelControl();
+                        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    }           
                     {
                         std::lock_guard<std::mutex> stream_lock(stream_mutex_);
                         if (stream_handler_) {
@@ -657,6 +662,8 @@ namespace rby1_ros2{
                             exit(1);
                         }
                     }
+                }else if(is_recovering_ && min_dist > collision_threshold_ * 1.5){
+                    robot_->CancelControl();
                 }
             }
             
@@ -905,9 +912,9 @@ namespace rby1_ros2{
         RCLCPP_INFO(this->get_logger(), "Received request to cancel FollowJointTrajectory goal");
         (void)goal_handle;
         robot_->CancelControl();
-        if (stream_handler_) {
-            stream_handler_->Cancel();
-        }
+        // if (stream_handler_) {
+        //     stream_handler_->Cancel();
+        // }
         return rclcpp_action::CancelResponse::ACCEPT;
     }
 
@@ -1155,13 +1162,35 @@ namespace rby1_ros2{
                 total_duration = trajectory.points.back().time_from_start.sec + 
                                  trajectory.points.back().time_from_start.nanosec * 1e-9;
             }
-            uint32_t wait_ms = static_cast<uint32_t>((total_duration + 2.0) * 1000.0);
+            //uint32_t wait_ms = static_cast<uint32_t>((total_duration + 2.0) * 1000.0);
             
             bool wait_success = false;
+            bool has_stream = false;
             {
                 std::lock_guard<std::mutex> lock(stream_mutex_);
                 if (stream_handler_) {
-                    wait_success = stream_handler_->WaitFor(wait_ms);
+                    has_stream = true;
+                }
+            }
+            if (has_stream) {
+                rclcpp::Rate wait_rate(100);
+                auto start_time = this->now();
+                double total_timeout = total_duration + 2.0;
+
+                while (rclcpp::ok()) {
+                    if (goal_handle->is_canceling() || is_control_canceled_) {
+                        RCLCPP_WARN(this->get_logger(), "Trajectory wait loop broken due to cancellation.");
+                        break;
+                    }
+                    if ((this->now() - start_time).seconds() > total_timeout) {
+                        break;
+                    }
+                    auto cm_state = robot_->GetControlManagerState();
+                    if (cm_state.control_state != rb::ControlManagerState::ControlState::kExecuting) {
+                        wait_success = true;
+                        break;
+                    }
+                    wait_rate.sleep();
                 }
             }
             if (wait_success) {
@@ -2297,7 +2326,7 @@ namespace rby1_ros2{
             }
             rb::JointPositionCommandBuilder b;
             b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(10.0));
-            b.SetMinimumTime(5.0); // 5 seconds for safe return
+            b.SetMinimumTime(10.0); // 5 seconds for safe return
             b.SetPosition(torso_q);
             body_comp.SetTorsoCommand(rb::TorsoCommandBuilder(b));
             use_body = true;
@@ -2311,7 +2340,7 @@ namespace rby1_ros2{
             }
             rb::JointPositionCommandBuilder b;
             b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(10.0));
-            b.SetMinimumTime(5.0);
+            b.SetMinimumTime(10.0);
             b.SetPosition(right_arm_q);
             body_comp.SetRightArmCommand(rb::ArmCommandBuilder(b));
             use_body = true;
@@ -2325,7 +2354,7 @@ namespace rby1_ros2{
             }
             rb::JointPositionCommandBuilder b;
             b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(10.0));
-            b.SetMinimumTime(5.0);
+            b.SetMinimumTime(10.0);
             b.SetPosition(left_arm_q);
             body_comp.SetLeftArmCommand(rb::ArmCommandBuilder(b));
             use_body = true;
@@ -2339,7 +2368,7 @@ namespace rby1_ros2{
             }
             rb::JointPositionCommandBuilder b;
             b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(10.0));
-            b.SetMinimumTime(5.0);
+            b.SetMinimumTime(10.0);
             b.SetPosition(head_q);
             component_cmd_builder.SetHeadCommand(rb::HeadCommandBuilder(b));
             use_head = true;
@@ -2353,7 +2382,7 @@ namespace rby1_ros2{
             try {
                 auto cmd_handler = robot_->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder), 10);
                 RCLCPP_INFO(this->get_logger(), "[COLLISION SAFETY] Retreat joint command sent. Waiting for completion...");
-                cmd_handler->WaitFor(6000); // Wait up to 6 seconds
+                cmd_handler->WaitFor(10000); // Wait up to 6 seconds
                 RCLCPP_INFO(this->get_logger(), "[COLLISION SAFETY] Retreat completed.");
             } catch (const std::exception& e) {
                 RCLCPP_ERROR(this->get_logger(), "[COLLISION SAFETY] Failed to send/execute retreat command: %s", e.what());

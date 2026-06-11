@@ -2,7 +2,7 @@
   ros__parameters:
     # RBY1 initialize Information
     robot_ip: "127.0.0.1:50051"
-    model: "a" # A or M , a or m
+    model: "m" # A or M , a or m
 
     # power on & servo on & enable when you launch ros2_driver
     initialize_robot: false
@@ -34,7 +34,7 @@
     # Collision options
     collision_recovery_enable: true
     collision_check_enable: false
-    collision_threshold: 0.01 # meter
+    collision_threshold: 0.02 # meter
 
     # Status publish triggers
     publish_battery_state: true

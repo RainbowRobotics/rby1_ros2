@@ -103,6 +103,8 @@ namespace rby1_ros2{
             rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
             std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
             rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
+
+            bool robot_initialize_flag{false};
             bool stream_active_{false};
             bool collision_enable_{true};
             bool collision_recovery_enable_{false};

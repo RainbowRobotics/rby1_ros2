@@ -3,19 +3,32 @@
 Mobile Base Control Example
 ===========================
 A demonstration node that publishes velocity commands to the 'cmd_vel' topic
-to move the RBY1 robot's omnidirectional/wheeled mobile base.
+to move the RBY1 robot's omnidirectional/wheeled mobile base while simultaneously
+sending an upper-body (arm/head) joint position command.
+
+NOTE: Stream control MUST be activated before publishing cmd_vel commands.
+      The driver ignores cmd_vel topics if the stream is not open.
+
+NOTE: cancel_control service also closes the stream.
+      If you only want to cancel the command (keep stream open),
+      use the action cancel instead (see Example 13).
 
 Operational Sequence:
   1. Ensures the robot is powered and enabled.
-  2. Publishes Twist commands to 'cmd_vel' to drive forward at 0.15 m/s for 2.0 seconds.
-  3. Stops the base for 1.0 second.
-  4. Publishes Twist commands to drive backward at -0.15 m/s for 2.0 seconds.
-  5. Stops the base for 1.0 second.
-  6. Publishes Twist commands to rotate at 0.25 rad/s for 2.0 seconds.
-  7. Stops the base and exits.
+  2. Activates stream control (mandatory for cmd_vel to be accepted by the driver).
+  3. Sends an upper-body joint position goal (arms + head) with priority=1 simultaneously.
+     Note: Mobile base default priority is 1, so upper-body commands must also use priority=1
+     to allow simultaneous control.
+  4. Publishes Twist commands to 'cmd_vel' to drive the base through a sequence of motions:
+       - Forward at 0.15 m/s for 2.0 s
+       - Backward at -0.15 m/s for 2.0 s
+       - Rotate at 0.25 rad/s for 2.0 s
+       - Lateral left at 0.15 m/s for 2.0 s  (mecanum base only)
+       - Lateral right at -0.15 m/s for 2.0 s (mecanum base only)
+  5. Stops the base and deactivates stream control on exit.
 
 Run:
-  ros2 run rby1_examples 14_mobile_base_control
+  ros2 run rby1_examples 12_mobile_base_control
 """
 import time
 import rclpy
