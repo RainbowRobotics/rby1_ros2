@@ -1,0 +1,19 @@
+# SetTrajectoryImpedance.srv
+# Enable or disable impedance mode for follow_joint_trajectory execution.
+# When enabled, each waypoint is sent as JointImpedanceControlCommand
+# instead of the default JointPositionCommand.
+bool state
+
+# Joint stiffness values [N·m/rad], ordered torso → right_arm → left_arm → head.
+# Total size must match the sum of DOFs for all commanded parts.
+# If empty and state=true, defaults to 100.0 for all joints.
+float64[] stiffness
+
+# Damping ratio (dimensionless). Default: 1.0
+float64 damping_ratio
+
+# Per-joint torque limit [N·m]. Default: 10.0
+float64 torque_limit
+---
+bool success
+string message

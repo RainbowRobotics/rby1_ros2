@@ -1,4 +1,6 @@
 #include "rby1_ros2_driver.hpp"
+#include <iomanip>
+#include <sstream>
 namespace rby1_ros2{
     //using namespace rb;
 
@@ -63,11 +65,7 @@ namespace rby1_ros2{
                             dyn_joint_names_.push_back(std::string(joint_names[i]));
                         }
                         
-                        //RCLCPP_INFO(this->get_logger(), "=== ROBOT JOINT PHYSICAL LIMITS ===");
-                        // for (size_t i = 0; i < dyn_joint_names_.size(); ++i) {
-                        //     RCLCPP_INFO(this->get_logger(), "Joint [%zu] %s: Pos=[%.3f, %.3f] rad, Vel_Max=%.3f rad/s, Accel_Max=%.3f rad/s^2",
-                        //                 i, dyn_joint_names_[i].c_str(), q_lower_[i], q_upper_[i], qdot_upper_[i], qddot_upper_[i]);
-                        // }
+                        
                     } catch (const std::exception& e) {
                         RCLCPP_WARN(this->get_logger(), "\033[1;33m[DYNAMICS WARNING] Failed to load dynamics model: %s. Cartesian poses and impedance features will be disabled.\033[0m", e.what());
                     }
@@ -87,6 +85,7 @@ namespace rby1_ros2{
                 right_arm_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(state_topic_name + "/right_arm", 10);
                 left_arm_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(state_topic_name + "/left_arm", 10);
                 head_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(state_topic_name + "/head", 10);
+                joint_state_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(state_topic_name, 10);
                 
                 // consolidated robot state publisher
                 robot_state_pub_ = this->create_publisher<rby1_msgs::msg::RobotState>("robot_state", 10);
@@ -98,6 +97,12 @@ namespace rby1_ros2{
                     tool_flange_left_pub_ = this->create_publisher<rby1_msgs::msg::ToolFlangeState>("tool_flange/left", 10);
                     tool_flange_right_pub_ = this->create_publisher<rby1_msgs::msg::ToolFlangeState>("tool_flange/right", 10);
                 }
+
+                odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("odom", 10);
+                tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
+                cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
+                    "cmd_vel", 10, std::bind(&RBY1_ROS2_DRIVER<ModelType>::cmd_vel_callback, this, _1));
+
                 // loop for reading joint state
                 // loop for reading joint state
                 joint_state_timer_ = this->create_wall_timer(std::chrono::milliseconds(static_cast<int>(robot_parameter_.get_state_period*1000.0)), std::bind(&RBY1_ROS2_DRIVER<ModelType>::read_joint_state, this));
@@ -117,25 +122,25 @@ namespace rby1_ros2{
                     "get_cartesian_pose", std::bind(&RBY1_ROS2_DRIVER<ModelType>::get_cartesian_pose_callback, this, _1, _2));
                 control_manager_service_ = this->create_service<rby1_msgs::srv::ControlManagerCommand>(
                     "control_manager_command", std::bind(&RBY1_ROS2_DRIVER<ModelType>::control_manager_callback, this, _1, _2));
-                motor_brake_service_ = this->create_service<rby1_msgs::srv::StateOnOff>(
-                    "set_motor_brake", std::bind(&RBY1_ROS2_DRIVER<ModelType>::motor_brake_callback, this, _1, _2));
+                // motor_brake_service_ = this->create_service<rby1_msgs::srv::StateOnOff>(
+                //     "set_motor_brake", std::bind(&RBY1_ROS2_DRIVER<ModelType>::motor_brake_callback, this, _1, _2));
+                collision_safety_service_ = this->create_service<rby1_msgs::srv::StateOnOff>(
+                    "set_collision_safety", std::bind(&RBY1_ROS2_DRIVER<ModelType>::collision_safety_callback, this, _1, _2));
                 
                 stream_control_service_ = this->create_service<rby1_msgs::srv::StateOnOff>(
                     "stream_control", std::bind(&RBY1_ROS2_DRIVER<ModelType>::stream_control_callback, this, _1, _2));
- 
-                odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("odom", 10);
-                tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
-                cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
-                    "cmd_vel", 10, std::bind(&RBY1_ROS2_DRIVER<ModelType>::cmd_vel_callback, this, _1));
+
+                set_trajectory_impedance_service_ = this->create_service<rby1_msgs::srv::SetTrajectoryImpedance>(
+                    "set_trajectory_impedance", std::bind(&RBY1_ROS2_DRIVER<ModelType>::set_trajectory_impedance_callback, this, _1, _2));
  
                 /* we need to add tool flange on/off service*/
  
-                stream_position_action_server_ = rclcpp_action::create_server<StreamPosition>(
+                follow_joint_trajectory_action_server_ = rclcpp_action::create_server<FollowJointTrajectory>(
                     this,
-                    "stream_position_command",
-                    std::bind(&RBY1_ROS2_DRIVER<ModelType>::handle_stream_goal, this, _1, _2),
-                    std::bind(&RBY1_ROS2_DRIVER<ModelType>::handle_stream_cancel, this, _1),
-                    std::bind(&RBY1_ROS2_DRIVER<ModelType>::handle_stream_accepted, this, _1));
+                    "follow_joint_trajectory",
+                    std::bind(&RBY1_ROS2_DRIVER<ModelType>::handle_follow_joint_trajectory_goal, this, _1, _2),
+                    std::bind(&RBY1_ROS2_DRIVER<ModelType>::handle_follow_joint_trajectory_cancel, this, _1),
+                    std::bind(&RBY1_ROS2_DRIVER<ModelType>::handle_follow_joint_trajectory_accepted, this, _1));
 
                 if (!joint_position_topic_name.empty()) {
                     rby1_joint_command_action_server_ = rclcpp_action::create_server<Rby1JointCommand>(
@@ -154,6 +159,104 @@ namespace rby1_ros2{
                         std::bind(&RBY1_ROS2_DRIVER<ModelType>::handle_rby1_cartesian_cancel, this, _1),
                         std::bind(&RBY1_ROS2_DRIVER<ModelType>::handle_rby1_cartesian_accepted, this, _1));
                 }
+
+                if (robot_initialize_flag){
+                    RCLCPP_INFO(this->get_logger(), "[INITIALIZE] initialize_robot is true. Starting automatic power/servo initialization...");
+
+                    // --- Power ON (mirrors power_control service logic) ---
+                    {
+                        // Build power_list_str from robot_parameter_.power_on_list
+                        std::string power_list_str;
+                        if (address == "127.0.0.1:50051") {
+                            power_list_str = ".*";
+                        } else {
+                            const auto& plist = robot_parameter_.power_on_list;
+                            for (size_t i = 0; i < plist.size(); i++) {
+                                if (plist[i] == "all" || plist[i] == ".*") {
+                                    power_list_str = ".*";
+                                    break;
+                                }
+                                power_list_str += plist[i];
+                                if (plist[i].find('v') == std::string::npos && plist[i] != ".*") {
+                                    power_list_str += "v";
+                                }
+                                if (i != plist.size() - 1) {
+                                    power_list_str += "|";
+                                }
+                            }
+                        }
+
+                        if (robot_->IsPowerOn(power_list_str)) {
+                            RCLCPP_INFO(this->get_logger(), "[INITIALIZE] Power is already ON [%s], skipping.", power_list_str.c_str());
+                        } else {
+                            RCLCPP_INFO(this->get_logger(), "[INITIALIZE] Power ON [%s]...", power_list_str.c_str());
+                            if (!robot_->PowerOn(power_list_str)) {
+                                RCLCPP_ERROR(this->get_logger(), "[INITIALIZE] Failed to power on [%s]. Aborting initialization.", power_list_str.c_str());
+                                throw std::runtime_error("[INITIALIZE] PowerOn failed during robot initialization.");
+                            }
+                            RCLCPP_INFO(this->get_logger(), "[INITIALIZE] Power ON succeeded.");
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                        }
+                    }
+
+                    // --- Servo ON (mirrors servo_control service logic) ---
+                    {
+                        // Build servo_list_str from robot_parameter_.servo_on_list
+                        std::string servo_list_str;
+                        const auto& slist = robot_parameter_.servo_on_list;
+                        for (size_t i = 0; i < slist.size(); i++) {
+                            const std::string& name = slist[i];
+                            if (name == "right")       servo_list_str += "^right_arm_.*";
+                            else if (name == "left")   servo_list_str += "^left_arm_.*";
+                            else if (name == "head")   servo_list_str += "^head_.*";
+                            else if (name == "torso")  servo_list_str += "^torso_.*";
+                            else if (name == "all") {
+                                servo_list_str = ".*";
+                                break;
+                            } else {
+                                servo_list_str += name;
+                            }
+                            if (i != slist.size() - 1) {
+                                servo_list_str += "|";
+                            }
+                        }
+
+                        bool already_on = false;
+                        try {
+                            if (robot_->IsServoOn(servo_list_str)) already_on = true;
+                        } catch (...) {}
+                        if (robot_->GetControlManagerState().state == rb::ControlManagerState::State::kEnabled) {
+                            already_on = true;
+                        }
+
+                        if (already_on) {
+                            RCLCPP_INFO(this->get_logger(), "[INITIALIZE] Servo is already ON [%s], skipping.", servo_list_str.c_str());
+                            check_controll_manager();
+                        } else {
+                            RCLCPP_INFO(this->get_logger(), "[INITIALIZE] Servo ON [%s]...", servo_list_str.c_str());
+                            if (!robot_->ServoOn(servo_list_str)) {
+                                RCLCPP_ERROR(this->get_logger(), "[INITIALIZE] SDK ServoOn failed for [%s]. Aborting initialization.", servo_list_str.c_str());
+                                throw std::runtime_error("[INITIALIZE] ServoOn failed during robot initialization.");
+                            }
+                            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+                            { // sync info
+                                std::lock_guard<std::mutex> lock(mutex_);
+                                info_ = robot_->GetRobotInfo();
+                                resize_joint_states();
+                            }
+
+                            RCLCPP_INFO(this->get_logger(), "[INITIALIZE] Checking Control Manager after Servo ON...");
+                            if (!check_controll_manager()) {
+                                RCLCPP_ERROR(this->get_logger(), "[INITIALIZE] Control Manager check failed after Servo ON.");
+                                throw std::runtime_error("[INITIALIZE] Control Manager failed after ServoOn during robot initialization.");
+                            }
+                            RCLCPP_INFO(this->get_logger(), "[INITIALIZE] Servo ON and Control Manager ready.");
+                        }
+                    }
+
+                    RCLCPP_INFO(this->get_logger(), "[INITIALIZE] Robot initialization complete.");
+                }
             }
             catch (const std::exception& e) {
                 RCLCPP_ERROR(this->get_logger(), "\033[1;31m[INITIALIZATION ERROR] Exception caught during driver setup: %s\033[0m", e.what());
@@ -170,6 +273,7 @@ namespace rby1_ros2{
         RCLCPP_INFO(this->get_logger(), "Declaring parameters...");
         this->declare_parameter<std::string>("robot_ip", "127.0.0.1:50051");
         this->declare_parameter<std::string>("model", "a");
+        this->declare_parameter<bool>("initialize_robot", false);
         this->declare_parameter<std::vector<std::string>>("power_on", {"all"});
         this->declare_parameter<std::vector<std::string>>("servo_on", {"all"});
 
@@ -185,11 +289,11 @@ namespace rby1_ros2{
         this->declare_parameter<double>("se2_angular_acceleration_limit", 0.5);
         
         this->declare_parameter<bool>("fault_reset_trigger", true);
-        this->declare_parameter<bool>("node_power_off_trigger", false);
         this->declare_parameter<double>("collision_threshold", 0.01);
         this->declare_parameter<bool>("publish_battery_state", true);
         this->declare_parameter<bool>("publish_tool_flange_state", true);
-        this->declare_parameter<bool>("collision_enable", false);
+        this->declare_parameter<bool>("collision_recovery_enable", false);
+        this->declare_parameter<bool>("Pre_collision_detection", false);
         
         this->get_parameter("robot_ip", address);
         this->get_parameter("model", model);
@@ -198,6 +302,7 @@ namespace rby1_ros2{
         joint_position_topic_name = "robot_joint";
         cartesian_position_topic_name = "robot_cartesian";
  
+        this->get_parameter("initialize_robot", robot_initialize_flag);
         this->get_parameter("power_on", robot_parameter_.power_on_list);
         this->get_parameter("servo_on", robot_parameter_.servo_on_list);
         this->get_parameter("get_state_period", robot_parameter_.get_state_period);
@@ -211,11 +316,12 @@ namespace rby1_ros2{
         this->get_parameter("se2_linear_acceleration_limit", robot_parameter_.se2_linear_acceleration_limit);
         this->get_parameter("se2_angular_acceleration_limit", robot_parameter_.se2_angular_acceleration_limit);
         this->get_parameter("fault_reset_trigger", fault_reset_trigger);
-        this->get_parameter("node_power_off_trigger", node_power_off_trigger_);
         this->get_parameter("collision_threshold", collision_threshold_);
         this->get_parameter("publish_battery_state", publish_battery_state_);
         this->get_parameter("publish_tool_flange_state", publish_tool_flange_state_);
-        this->get_parameter("collision_enable", collision_enable_);
+        this->get_parameter("collision_recovery_enable", collision_recovery_enable_);
+        this->get_parameter("Pre_collision_detection", Pre_collision_detection_);
+        collision_enable_ = true;
 
 
 
@@ -609,8 +715,8 @@ namespace rby1_ros2{
                 robot_state_.state = NONE;
             }
 
-            // Collision check (respect collision_enable_)
-            if (collision_enable_ && !state.collisions.empty()) {
+            // Collision check (always enabled)
+            if (!state.collisions.empty()) {
                 double min_dist = 1e9;
                 std::string link1, link2;
                 for (const auto& col : state.collisions) {
@@ -621,14 +727,38 @@ namespace rby1_ros2{
                     }
                 }
                 if (min_dist < collision_threshold_) {
-                    RCLCPP_ERROR(this->get_logger(), "Collision detected! Distance: %.4f (Links: %s <-> %s). Canceling control.", 
+                    RCLCPP_ERROR(this->get_logger(), "Collision detected! Distance: %.4f (Links: %s <-> %s).", 
                                  min_dist, link1.c_str(), link2.c_str());
-                    robot_->CancelControl();
-                    if (stream_handler_) {
-                        stream_handler_.reset();
+                    
+                    if(!is_recovering_){
+                        robot_->CancelControl();
+                        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    }           
+                    {
+                        std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+                        if (stream_handler_) {
+                            stream_handler_.reset();
+                        }
                     }
                     is_control_canceled_ = true;
                     stream_active_ = false;
+
+                    if (collision_recovery_enable_) {
+                        if (is_recovering_) {
+                            // Currently recovering from collision, do not shut down
+                        } else if (is_controlling_ || has_initial_pose_) {
+                            bool expected = false;
+                            if (is_recovering_.compare_exchange_strong(expected, true)) {
+                                std::thread(&RBY1_ROS2_DRIVER<ModelType>::execute_collision_safety_retreat, this).detach();
+                            }
+                        } else {
+                            RCLCPP_FATAL(this->get_logger(), "Collision detected without active command (startup collision)! Shutting down driver.");
+                            rclcpp::shutdown();
+                            exit(1);
+                        }
+                    }
+                }else if(is_recovering_ && min_dist > collision_threshold_ * 1.5){
+                    robot_->CancelControl();
                 }
             }
             
@@ -654,6 +784,30 @@ namespace rby1_ros2{
             this->right_arm_pub_->publish(this->robot_joint_.joint_right_arm);
             this->left_arm_pub_->publish(this->robot_joint_.joint_left_arm);
             this->head_pub_->publish(this->robot_joint_.joint_head);
+
+            // Publish unified joint states for MoveIt integration
+            {
+                sensor_msgs::msg::JointState unified_js;
+                unified_js.header.stamp = now;
+
+                auto append_joints = [&](const std::vector<unsigned int>& idx_vec) {
+                    for (size_t i = 0; i < idx_vec.size(); ++i) {
+                        unsigned int idx = idx_vec[i];
+                        unified_js.name.push_back(info_.joint_infos[idx].name);
+                        unified_js.position.push_back(state.position[idx]);
+                        unified_js.velocity.push_back(state.velocity[idx]);
+                        unified_js.effort.push_back(state.torque[idx]);
+                    }
+                };
+
+                append_joints(this->info_.torso_joint_idx);
+                append_joints(this->info_.right_arm_joint_idx);
+                append_joints(this->info_.left_arm_joint_idx);
+                append_joints(this->info_.head_joint_idx);
+                append_joints(this->info_.mobility_joint_idx);
+
+                this->joint_state_pub_->publish(unified_js);
+            }
 
             // Base Mobility Odometry publishing
             {
@@ -752,6 +906,8 @@ namespace rby1_ros2{
             robot_state_msg.center_of_mass[1] = state.center_of_mass[1];
             robot_state_msg.center_of_mass[2] = state.center_of_mass[2];
 
+            robot_state_msg.robot_stream_state = stream_active_;
+
             robot_state_pub_->publish(robot_state_msg);
 
             // Publish Battery State
@@ -832,11 +988,11 @@ namespace rby1_ros2{
         response->message = "Control cancelled";
     }
 
-    // --- StreamPosition Handlers ---
+    // --- FollowJointTrajectory Handlers ---
     template <typename ModelType>
-    rclcpp_action::GoalResponse RBY1_ROS2_DRIVER<ModelType>::handle_stream_goal(
-        const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const StreamPosition::Goal> goal) {
-        RCLCPP_INFO(this->get_logger(), "Received StreamPosition request");
+    rclcpp_action::GoalResponse RBY1_ROS2_DRIVER<ModelType>::handle_follow_joint_trajectory_goal(
+        const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const FollowJointTrajectory::Goal> goal) {
+        RCLCPP_INFO(this->get_logger(), "Received FollowJointTrajectory request");
         (void)uuid;
         if (goal->trajectory.points.empty()) {
             RCLCPP_ERROR(this->get_logger(), "Trajectory has no points.");
@@ -846,32 +1002,49 @@ namespace rby1_ros2{
     }
 
     template <typename ModelType>
-    rclcpp_action::CancelResponse RBY1_ROS2_DRIVER<ModelType>::handle_stream_cancel(
-        const std::shared_ptr<rclcpp_action::ServerGoalHandle<StreamPosition>> goal_handle) {
-        RCLCPP_INFO(this->get_logger(), "Received request to cancel StreamPosition goal");
+    rclcpp_action::CancelResponse RBY1_ROS2_DRIVER<ModelType>::handle_follow_joint_trajectory_cancel(
+        const std::shared_ptr<rclcpp_action::ServerGoalHandle<FollowJointTrajectory>> goal_handle) {
+        RCLCPP_INFO(this->get_logger(), "Received request to cancel FollowJointTrajectory goal");
         (void)goal_handle;
         robot_->CancelControl();
-        if (stream_handler_) {
-            stream_handler_->Cancel();
-        }
+        // if (stream_handler_) {
+        //     stream_handler_->Cancel();
+        // }
         return rclcpp_action::CancelResponse::ACCEPT;
     }
 
     template <typename ModelType>
-    void RBY1_ROS2_DRIVER<ModelType>::handle_stream_accepted(
-        const std::shared_ptr<rclcpp_action::ServerGoalHandle<StreamPosition>> goal_handle) {
+    void RBY1_ROS2_DRIVER<ModelType>::handle_follow_joint_trajectory_accepted(
+        const std::shared_ptr<rclcpp_action::ServerGoalHandle<FollowJointTrajectory>> goal_handle) {
         using namespace std::placeholders;
-        RCLCPP_INFO(this->get_logger(), "StreamPosition Goal accepted. Detaching execution thread...");
-        std::thread{std::bind(&RBY1_ROS2_DRIVER<ModelType>::execute_stream_position, this, _1), goal_handle}.detach();
+        RCLCPP_INFO(this->get_logger(), "FollowJointTrajectory Goal accepted. Detaching execution thread...");
+        std::thread{std::bind(&RBY1_ROS2_DRIVER<ModelType>::execute_follow_joint_trajectory, this, _1), goal_handle}.detach();
     }
 
     template <typename ModelType>
-    void RBY1_ROS2_DRIVER<ModelType>::execute_stream_position(
-        const std::shared_ptr<rclcpp_action::ServerGoalHandle<StreamPosition>> goal_handle) {
+    void RBY1_ROS2_DRIVER<ModelType>::execute_follow_joint_trajectory(
+        const std::shared_ptr<rclcpp_action::ServerGoalHandle<FollowJointTrajectory>> goal_handle) {
+        
         is_control_canceled_ = false;
-        RCLCPP_INFO(this->get_logger(), "Starting StreamPosition execution thread");
+        
+        // Save initial pose for collision safety
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto current_state = robot_->GetState();
+            initial_joint_positions_.resize(current_state.position.size());
+            std::copy(current_state.position.data(), current_state.position.data() + current_state.position.size(), initial_joint_positions_.begin());
+            has_initial_pose_ = true;
+        }
+        
+        is_controlling_ = true;
+        struct ControlGuard {
+            std::atomic<bool>& controlling;
+            ~ControlGuard() { controlling = false; }
+        } guard{is_controlling_};
+
+        RCLCPP_INFO(this->get_logger(), "Starting FollowJointTrajectory execution thread");
         const auto goal = goal_handle->get_goal();
-        auto result = std::make_shared<StreamPosition::Result>();
+        auto result = std::make_shared<FollowJointTrajectory::Result>();
 
         const auto& trajectory = goal->trajectory;
         std::vector<int> joint_mapping(trajectory.joint_names.size(), -1);
@@ -885,6 +1058,7 @@ namespace rby1_ros2{
             }
         }
 
+        // Limit checks
         if (dynamics_ && dyn_state_ && q_lower_.size() > 0) {
             for (size_t i = 0; i < trajectory.points.size(); ++i) {
                 const auto& point = trajectory.points[i];
@@ -907,13 +1081,13 @@ namespace rby1_ros2{
 
                         if (pos < min_p || pos > max_p) {
                             RCLCPP_ERROR(this->get_logger(), 
-                                         "\033[1;31m[SAFETY ERROR] StreamPosition trajectory point %lu violates limit: "
-                                         "joint '%s' position %.3f out of range [%.3f, %.3f] rad.\033[0m",
+                                         "[SAFETY ERROR] FollowJointTrajectory trajectory point %lu violates limit: "
+                                         "joint '%s' position %.3f out of range [%.3f, %.3f] rad.",
                                          i, joint_name.c_str(), pos, min_p, max_p);
-                            result->success = false;
-                            result->finish_code = "Safety Limit Exceeded: Commanded position for joint '" + joint_name + 
-                                                  "' (" + std::to_string(pos) + " rad) is out of safety range [" + 
-                                                  std::to_string(min_p) + ", " + std::to_string(max_p) + "] rad.";
+                            result->error_code = FollowJointTrajectory::Result::INVALID_JOINTS;
+                            result->error_string = "Limit Exceeded: Commanded position for joint '" + joint_name + 
+                                                   "' (" + std::to_string(pos) + ") out of safety range [" + 
+                                                   std::to_string(min_p) + ", " + std::to_string(max_p) + "] rad.";
                             try { goal_handle->abort(result); } catch (...) {}
                             return;
                         }
@@ -922,17 +1096,76 @@ namespace rby1_ros2{
             }
         }
 
-        if (!stream_active_ || !stream_handler_) {
-            RCLCPP_ERROR(this->get_logger(), "Trajectory stream command rejected: stream is not active. Call /stream_control service first.");
-            result->success = false;
-            result->finish_code = "kRejected";
-            try { goal_handle->abort(result); } catch (...) {}
-            return;
+        // Collision check for trajectory waypoints
+        if (Pre_collision_detection_ && dynamics_ && dyn_state_) {
+            for (size_t i = 0; i < trajectory.points.size(); ++i) {
+                const auto& point = trajectory.points[i];
+                Eigen::Vector<double, ModelType::kRobotDOF> target_q = Eigen::Vector<double, ModelType::kRobotDOF>::Zero();
+                
+                // Initialize target_q with current robot positions
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    auto current_state = robot_->GetState();
+                    for (int k = 0; k < (int)dyn_joint_names_.size(); ++k) {
+                        std::string name = dyn_joint_names_[k];
+                        for (size_t j = 0; j < info_.joint_infos.size(); ++j) {
+                            if (info_.joint_infos[j].name == name) {
+                                target_q[k] = current_state.position[j];
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // Update target_q with waypoint positions
+                for (size_t j = 0; j < joint_mapping.size(); ++j) {
+                    if (joint_mapping[j] != -1 && j < point.positions.size()) {
+                        std::string joint_name = info_.joint_infos[joint_mapping[j]].name;
+                        for (size_t k = 0; k < dyn_joint_names_.size(); ++k) {
+                            if (dyn_joint_names_[k] == joint_name) {
+                                target_q[k] = point.positions[j];
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                auto reason = get_predicted_collision_reason(target_q);
+                if (reason.has_value()) {
+                    RCLCPP_WARN(this->get_logger(), 
+                                 "[PREDICTIVE COLLISION REJECTED] FollowJointTrajectory waypoint %lu predicts collision: %s",
+                                 i, reason.value().c_str());
+                    result->error_code = FollowJointTrajectory::Result::PATH_TOLERANCE_VIOLATED;
+                    result->error_string = reason.value() + " at trajectory waypoint index " + std::to_string(i);
+                    try { goal_handle->abort(result); } catch (...) {}
+                    return;
+                }
+            }
         }
 
-        // 1. Ensure robot is ready before creating stream
+        // Auto-activate stream if not active
+        bool stream_was_inactive = false;
+        {
+            std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+            if (!stream_active_ || !stream_handler_) {
+                try {
+                    stream_handler_ = robot_->CreateCommandStream();
+                    stream_active_ = true;
+                    stream_was_inactive = true;
+                    RCLCPP_INFO(this->get_logger(), "Auto-activated persistent stream control for action execution.");
+                } catch (const std::exception& e) {
+                    RCLCPP_ERROR(this->get_logger(), "Failed to auto-activate stream control: %s", e.what());
+                    result->error_code = FollowJointTrajectory::Result::INVALID_GOAL;
+                    result->error_string = "Failed to auto-activate stream: " + std::string(e.what());
+                    try { goal_handle->abort(result); } catch (...) {}
+                    return;
+                }
+            }
+        }
+
+        // Ensure robot ready
         this->check_controll_manager();
-        usleep(100000); // 100ms safety gap
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         auto current_state = robot_->GetState();
         Eigen::VectorXd q = Eigen::Map<const Eigen::VectorXd>(current_state.position.data(), current_state.position.size());
@@ -940,21 +1173,27 @@ namespace rby1_ros2{
         try {
             for (size_t i = 0; i < trajectory.points.size(); ++i) {
                 const auto& point = trajectory.points[i];
-                if (goal_handle->is_canceling()) {
-                    result->success = false;
-                    result->finish_code = "kCanceled";
+                if (goal_handle->is_canceling() || is_control_canceled_ || !rclcpp::ok()) {
+                    RCLCPP_WARN(this->get_logger(), "FollowJointTrajectory execution canceled.");
+                    result->error_code = FollowJointTrajectory::Result::INVALID_GOAL;
+                    result->error_string = "Canceled";
                     try { goal_handle->canceled(result); } catch (...) {}
+                    
+                    if (stream_was_inactive) {
+                        std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+                        if (stream_handler_) stream_handler_.reset();
+                        stream_active_ = false;
+                        RCLCPP_INFO(this->get_logger(), "Auto-deactivated persistent stream control on cancel.");
+                    }
                     return;
                 }
 
-                // Update q with trajectory points - q accumulates changes over points
                 for (size_t j = 0; j < joint_mapping.size(); ++j) {
                     if (joint_mapping[j] != -1 && j < point.positions.size()) {
                         q[joint_mapping[j]] = point.positions[j];
                     }
                 }
 
-                // Calculate timing from trajectory message (Delta between points)
                 double pt_time = 0.01;
                 if (i > 0) {
                     pt_time = (trajectory.points[i].time_from_start.sec + trajectory.points[i].time_from_start.nanosec * 1e-9) - 
@@ -966,102 +1205,175 @@ namespace rby1_ros2{
 
                 double cmd_min_time = pt_time * 1.1;
 
-                // Build Component-based commands for each part to ensure full-body synchronization
-                // Build Component-based commands for each part using CORRECT indices
-                Eigen::VectorXd torso_q(6);
-                for (int i = 0; i < 6; ++i) torso_q[i] = q[info_.torso_joint_idx[i]];
-                rb::TorsoCommandBuilder torso_builder;
-                torso_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(torso_q).SetMinimumTime(cmd_min_time));
+                Eigen::VectorXd torso_q(info_.torso_joint_idx.size());
+                for (size_t k = 0; k < info_.torso_joint_idx.size(); ++k) torso_q[k] = q[info_.torso_joint_idx[k]];
 
-                Eigen::VectorXd right_arm_q(7);
-                for (int i = 0; i < 7; ++i) right_arm_q[i] = q[info_.right_arm_joint_idx[i]];
-                rb::ArmCommandBuilder right_arm_builder;
-                right_arm_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(right_arm_q).SetMinimumTime(cmd_min_time));
+                Eigen::VectorXd right_arm_q(info_.right_arm_joint_idx.size());
+                for (size_t k = 0; k < info_.right_arm_joint_idx.size(); ++k) right_arm_q[k] = q[info_.right_arm_joint_idx[k]];
 
-                Eigen::VectorXd left_arm_q(7);
-                for (int i = 0; i < 7; ++i) left_arm_q[i] = q[info_.left_arm_joint_idx[i]];
-                rb::ArmCommandBuilder left_arm_builder;
-                left_arm_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(left_arm_q).SetMinimumTime(cmd_min_time));
+                Eigen::VectorXd left_arm_q(info_.left_arm_joint_idx.size());
+                for (size_t k = 0; k < info_.left_arm_joint_idx.size(); ++k) left_arm_q[k] = q[info_.left_arm_joint_idx[k]];
 
-                Eigen::VectorXd head_q(2);
-                for (int i = 0; i < 2; ++i) head_q[i] = q[info_.head_joint_idx[i]];
-                rb::HeadCommandBuilder head_builder;
-                head_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(head_q).SetMinimumTime(cmd_min_time));
+                Eigen::VectorXd head_q(info_.head_joint_idx.size());
+                for (size_t k = 0; k < info_.head_joint_idx.size(); ++k) head_q[k] = q[info_.head_joint_idx[k]];
 
                 rb::BodyComponentBasedCommandBuilder body_comp_builder;
-                body_comp_builder.SetTorsoCommand(torso_builder);
-                body_comp_builder.SetRightArmCommand(right_arm_builder);
-                body_comp_builder.SetLeftArmCommand(left_arm_builder);
-
                 rb::ComponentBasedCommandBuilder comp_builder;
-                comp_builder.SetBodyCommand(rb::BodyCommandBuilder(std::move(body_comp_builder)));
-                comp_builder.SetHeadCommand(head_builder);
 
-                rb::RobotCommandFeedback feedback;
+                if (trajectory_impedance_enabled_) {
+                    // --- Impedance mode ---
+                    // JointImpedanceControlCommandBuilder is move-only (copy ctor deleted),
+                    // so each part must be built inline without a helper lambda.
+                    size_t torso_dof = info_.torso_joint_idx.size();
+                    size_t right_dof = info_.right_arm_joint_idx.size();
+                    size_t left_dof  = info_.left_arm_joint_idx.size();
+
+                    // Helper to slice stiffness from the stored full-body vector (fallback to 100.0)
+                    auto make_stiffness = [&](size_t offset, size_t dof) -> Eigen::VectorXd {
+                        if (trajectory_stiffness_.size() >= offset + dof) {
+                            return Eigen::Map<const Eigen::VectorXd>(trajectory_stiffness_.data() + offset, dof);
+                        }
+                        return Eigen::VectorXd::Constant(dof, 100.0);
+                    };
+
+                    // Torso
+                    {
+                        auto b = rb::JointImpedanceControlCommandBuilder();
+                        b.SetPosition(torso_q);
+                        b.SetMinimumTime(cmd_min_time);
+                        b.SetStiffness(make_stiffness(0, torso_dof));
+                        b.SetDampingRatio(trajectory_damping_ratio_);
+                        b.SetTorqueLimit(Eigen::VectorXd::Constant(torso_dof, trajectory_torque_limit_));
+                        body_comp_builder.SetTorsoCommand(rb::TorsoCommandBuilder(std::move(b)));
+                    }
+                    // Right arm
+                    {
+                        auto b = rb::JointImpedanceControlCommandBuilder();
+                        b.SetPosition(right_arm_q);
+                        b.SetMinimumTime(cmd_min_time);
+                        b.SetStiffness(make_stiffness(torso_dof, right_dof));
+                        b.SetDampingRatio(trajectory_damping_ratio_);
+                        b.SetTorqueLimit(Eigen::VectorXd::Constant(right_dof, trajectory_torque_limit_));
+                        body_comp_builder.SetRightArmCommand(rb::ArmCommandBuilder(std::move(b)));
+                    }
+                    // Left arm
+                    {
+                        auto b = rb::JointImpedanceControlCommandBuilder();
+                        b.SetPosition(left_arm_q);
+                        b.SetMinimumTime(cmd_min_time);
+                        b.SetStiffness(make_stiffness(torso_dof + right_dof, left_dof));
+                        b.SetDampingRatio(trajectory_damping_ratio_);
+                        b.SetTorqueLimit(Eigen::VectorXd::Constant(left_dof, trajectory_torque_limit_));
+                        body_comp_builder.SetLeftArmCommand(rb::ArmCommandBuilder(std::move(b)));
+                    }
+                    // Head does not support impedance — fall back to position control
+                    rb::HeadCommandBuilder head_builder;
+                    head_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(head_q).SetMinimumTime(cmd_min_time));
+                    comp_builder.SetHeadCommand(head_builder);
+                } else {
+                    // --- Default position control mode ---
+                    rb::TorsoCommandBuilder torso_builder;
+                    torso_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(torso_q).SetMinimumTime(cmd_min_time));
+
+                    rb::ArmCommandBuilder right_arm_builder;
+                    right_arm_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(right_arm_q).SetMinimumTime(cmd_min_time));
+
+                    rb::ArmCommandBuilder left_arm_builder;
+                    left_arm_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(left_arm_q).SetMinimumTime(cmd_min_time));
+
+                    rb::HeadCommandBuilder head_builder;
+                    head_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(head_q).SetMinimumTime(cmd_min_time));
+
+                    body_comp_builder.SetTorsoCommand(torso_builder);
+                    body_comp_builder.SetRightArmCommand(right_arm_builder);
+                    body_comp_builder.SetLeftArmCommand(left_arm_builder);
+                    comp_builder.SetHeadCommand(head_builder);
+                }
+
+
+                comp_builder.SetBodyCommand(rb::BodyCommandBuilder(std::move(body_comp_builder)));
+
                 {
                     std::lock_guard<std::mutex> lock(stream_mutex_);
                     if (!stream_handler_) {
                         throw std::runtime_error("Stream was deactivated during transmission.");
                     }
-                    feedback = stream_handler_->SendCommand(
-                        rb::RobotCommandBuilder().SetCommand(comp_builder)
-                    );
+                    stream_handler_->SendCommand(rb::RobotCommandBuilder().SetCommand(comp_builder));
                 }
 
-                auto action_feedback = std::make_shared<StreamPosition::Feedback>();
-                action_feedback->current_state = "streaming point " + std::to_string(i + 1) + "/" + std::to_string(trajectory.points.size());
+                auto action_feedback = std::make_shared<FollowJointTrajectory::Feedback>();
+                action_feedback->joint_names = trajectory.joint_names;
+                action_feedback->desired = point;
                 try { goal_handle->publish_feedback(action_feedback); } catch (...) {}
 
-                // Wait for the duration of the point before sending the next one
-                // to match the requested trajectory timing.
                 auto sleep_duration = std::chrono::microseconds(static_cast<long long>(pt_time * 1e6));
                 std::this_thread::sleep_for(sleep_duration);
             }
-        } catch (const std::exception& e) {
-            RCLCPP_ERROR(this->get_logger(), "Error during stream transmission: %s", e.what());
-            result->success = false;
-            result->finish_code = "kError";
-            try { goal_handle->abort(result); } catch (...) {}
-            return;
-        }
 
-        double total_duration = 0.0;
-        if (!trajectory.points.empty()) {
-            total_duration = trajectory.points.back().time_from_start.sec + 
-                             trajectory.points.back().time_from_start.nanosec * 1e-9;
-        }
-        uint32_t wait_ms = static_cast<uint32_t>((total_duration + 2.0) * 1000.0);
-        RCLCPP_INFO(this->get_logger(), "Stream sent. Waiting for completion (%u ms)...", wait_ms);
-        try {
+            // Wait for completion
+            double total_duration = 0.0;
+            if (!trajectory.points.empty()) {
+                total_duration = trajectory.points.back().time_from_start.sec + 
+                                 trajectory.points.back().time_from_start.nanosec * 1e-9;
+            }
+            //uint32_t wait_ms = static_cast<uint32_t>((total_duration + 2.0) * 1000.0);
+            
             bool wait_success = false;
+            bool has_stream = false;
             {
                 std::lock_guard<std::mutex> lock(stream_mutex_);
-                if (!stream_handler_) {
-                    throw std::runtime_error("Stream was deactivated while waiting.");
+                if (stream_handler_) {
+                    has_stream = true;
                 }
-                wait_success = stream_handler_->WaitFor(wait_ms);
             }
-            if (!wait_success) {
-                RCLCPP_ERROR(this->get_logger(), "Timeout waiting for stream completion (%u ms).", wait_ms);
-                result->success = false;
-                result->finish_code = "kTimeout";
+            if (has_stream) {
+                rclcpp::Rate wait_rate(100);
+                auto start_time = this->now();
+                double total_timeout = total_duration + 2.0;
+
+                while (rclcpp::ok()) {
+                    if (goal_handle->is_canceling() || is_control_canceled_) {
+                        RCLCPP_WARN(this->get_logger(), "Trajectory wait loop broken due to cancellation.");
+                        break;
+                    }
+                    if ((this->now() - start_time).seconds() > total_timeout) {
+                        break;
+                    }
+                    auto cm_state = robot_->GetControlManagerState();
+                    if (cm_state.control_state != rb::ControlManagerState::ControlState::kExecuting) {
+                        wait_success = true;
+                        break;
+                    }
+                    wait_rate.sleep();
+                }
+            }
+            if (wait_success) {
+                RCLCPP_INFO(this->get_logger(), "FollowJointTrajectory execution completed successfully.");
+                result->error_code = FollowJointTrajectory::Result::SUCCESSFUL;
+                try { goal_handle->succeed(result); } catch (...) {}
+            } else {
+                RCLCPP_WARN(this->get_logger(), "Timeout waiting for FollowJointTrajectory completion.");
+                result->error_code = FollowJointTrajectory::Result::GOAL_TOLERANCE_VIOLATED;
+                result->error_string = "Timeout waiting for stream completion.";
                 try { goal_handle->abort(result); } catch (...) {}
-                this->check_controll_manager();
-                return;
             }
-            RCLCPP_INFO(this->get_logger(), "Stream execution finished.");
+
         } catch (const std::exception& e) {
-            RCLCPP_ERROR(this->get_logger(), "Error during stream wait: %s", e.what());
-            result->success = false;
-            result->finish_code = "kError";
+            RCLCPP_ERROR(this->get_logger(), "Error during FollowJointTrajectory stream transmission: %s", e.what());
+            result->error_code = FollowJointTrajectory::Result::INVALID_GOAL;
+            result->error_string = std::string("Error during execution: ") + e.what();
             try { goal_handle->abort(result); } catch (...) {}
-            this->check_controll_manager();
-            return;
         }
 
-        result->success = true;
-        result->finish_code = "kOk";
-        try { goal_handle->succeed(result); } catch (...) {}
+        // Clean up stream if it was auto-activated for this command
+        if (stream_was_inactive) {
+            std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+            if (stream_handler_) {
+                stream_handler_.reset();
+            }
+            stream_active_ = false;
+            RCLCPP_INFO(this->get_logger(), "Auto-deactivated persistent stream control.");
+        }
     }
 
     // --- Rby1 Joint Command Handlers ---
@@ -1094,6 +1406,19 @@ namespace rby1_ros2{
     void RBY1_ROS2_DRIVER<ModelType>::execute_rby1_joint_command(
         const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1JointCommand>> goal_handle) {
         is_control_canceled_ = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto current_state = robot_->GetState();
+            initial_joint_positions_.resize(current_state.position.size());
+            std::copy(current_state.position.data(), current_state.position.data() + current_state.position.size(), initial_joint_positions_.begin());
+            has_initial_pose_ = true;
+        }
+        is_controlling_ = true;
+        struct ControlGuard {
+            std::atomic<bool>& controlling;
+            ~ControlGuard() { controlling = false; }
+        } guard{is_controlling_};
+
         const auto goal = goal_handle->get_goal();
         auto result = std::make_shared<Rby1JointCommand::Result>();
 
@@ -1146,6 +1471,71 @@ namespace rby1_ros2{
                 result->finish_code = "Control Manager Error";
                 try { goal_handle->abort(result); } catch (...) {}
                 return;
+            }
+
+            if (Pre_collision_detection_) {
+                Eigen::Vector<double, ModelType::kRobotDOF> target_q = Eigen::Vector<double, ModelType::kRobotDOF>::Zero();
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    auto current_state = robot_->GetState();
+                    for (int i = 0; i < (int)dyn_joint_names_.size(); ++i) {
+                        std::string name = dyn_joint_names_[i];
+                        for (size_t j = 0; j < info_.joint_infos.size(); ++j) {
+                            if (info_.joint_infos[j].name == name) {
+                                target_q[i] = current_state.position[j];
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                auto update_target_q_part = [&](const rby1_msgs::msg::JointCommand& cmd, const std::string& part_name) {
+                    if (cmd.position.empty()) return;
+                    if (cmd.use_group_joint) {
+                        for (size_t i = 0; i < cmd.joint_names.size() && i < cmd.position.size(); ++i) {
+                            std::string commanded_name = cmd.joint_names[i];
+                            for (size_t k = 0; k < dyn_joint_names_.size(); ++k) {
+                                if (dyn_joint_names_[k] == commanded_name) {
+                                    target_q[k] = cmd.position[i];
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        const std::vector<unsigned int>* part_indices = nullptr;
+                        if (part_name == "torso") part_indices = &info_.torso_joint_idx;
+                        else if (part_name == "right_arm") part_indices = &info_.right_arm_joint_idx;
+                        else if (part_name == "left_arm") part_indices = &info_.left_arm_joint_idx;
+                        else if (part_name == "head") part_indices = &info_.head_joint_idx;
+                        
+                        if (part_indices && cmd.position.size() == part_indices->size()) {
+                            for (size_t i = 0; i < cmd.position.size(); ++i) {
+                                size_t global_idx = (*part_indices)[i];
+                                std::string joint_name = info_.joint_infos[global_idx].name;
+                                for (size_t k = 0; k < dyn_joint_names_.size(); ++k) {
+                                    if (dyn_joint_names_[k] == joint_name) {
+                                        target_q[k] = cmd.position[i];
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+
+                update_target_q_part(goal->torso, "torso");
+                update_target_q_part(goal->right_arm, "right_arm");
+                update_target_q_part(goal->left_arm, "left_arm");
+                update_target_q_part(goal->head, "head");
+
+                auto reason = get_predicted_collision_reason(target_q);
+                if (reason.has_value()) {
+                    result->success = false;
+                    result->finish_code = reason.value();
+                    RCLCPP_WARN(this->get_logger(), "\033[1;33m[PREDICTIVE COLLISION REJECTED] %s\033[0m", reason.value().c_str());
+                    try { goal_handle->abort(result); } catch (...) {}
+                    return;
+                }
             }
 
             rb::ComponentBasedCommandBuilder component_cmd_builder;
@@ -1460,6 +1850,19 @@ namespace rby1_ros2{
     void RBY1_ROS2_DRIVER<ModelType>::execute_rby1_cartesian_command(
         const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1CartesianCommand>> goal_handle) {
         is_control_canceled_ = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto current_state = robot_->GetState();
+            initial_joint_positions_.resize(current_state.position.size());
+            std::copy(current_state.position.data(), current_state.position.data() + current_state.position.size(), initial_joint_positions_.begin());
+            has_initial_pose_ = true;
+        }
+        is_controlling_ = true;
+        struct ControlGuard {
+            std::atomic<bool>& controlling;
+            ~ControlGuard() { controlling = false; }
+        } guard{is_controlling_};
+
         const auto goal = goal_handle->get_goal();
         auto result = std::make_shared<Rby1CartesianCommand::Result>();
 
@@ -1512,6 +1915,66 @@ namespace rby1_ros2{
                 result->finish_code = "Control Manager Error";
                 try { goal_handle->abort(result); } catch (...) {}
                 return;
+            }
+
+            if (Pre_collision_detection_) {
+                std::vector<typename rb::OptimalControl<ModelType::kRobotDOF>::LinkTarget> link_targets;
+                
+                auto add_target_helper = [&](const rby1_msgs::msg::CartesianCommand& cmd) -> bool {
+                    if (cmd.ref_link.empty() && cmd.target_link.empty()) return true;
+                    if (cmd.ref_link.empty() || cmd.target_link.empty()) {
+                        return false;
+                    }
+                    
+                    int ref_idx = get_link_index(cmd.ref_link);
+                    int target_idx = get_link_index(cmd.target_link);
+                    if (ref_idx == -1 || target_idx == -1) {
+                        return false;
+                    }
+                    
+                    typename rb::OptimalControl<ModelType::kRobotDOF>::LinkTarget target;
+                    target.ref_link_index = ref_idx;
+                    target.link_index = target_idx;
+                    
+                    Eigen::Quaterniond q(cmd.transform.rotation.w, cmd.transform.rotation.x, cmd.transform.rotation.y, cmd.transform.rotation.z);
+                    Eigen::Vector3d t(cmd.transform.translation.x, cmd.transform.translation.y, cmd.transform.translation.z);
+                    
+                    rb::math::SE3::MatrixType T = rb::math::SE3::MatrixType::Identity();
+                    T.block(0, 0, 3, 3) = q.toRotationMatrix();
+                    T.block(0, 3, 3, 1) = t;
+                    target.T = T;
+                    
+                    target.weight_position = 1000.0;
+                    target.weight_orientation = 100.0;
+                    
+                    link_targets.push_back(target);
+                    return true;
+                };
+
+                bool ok = true;
+                ok &= add_target_helper(goal->torso);
+                ok &= add_target_helper(goal->right_arm);
+                ok &= add_target_helper(goal->left_arm);
+
+                if (ok && !link_targets.empty()) {
+                    auto solved_q = solve_cartesian_ik(link_targets);
+                    if (!solved_q.has_value()) {
+                        result->success = false;
+                        result->finish_code = "Failed to solve Inverse Kinematics for target Cartesian commands";
+                        RCLCPP_WARN(this->get_logger(), "\033[1;33m[PREDICTIVE COLLISION ERROR] Cartesian command rejected: Failed to solve Inverse Kinematics.\033[0m");
+                        try { goal_handle->abort(result); } catch (...) {}
+                        return;
+                    }
+                    
+                    auto reason = get_predicted_collision_reason(solved_q.value());
+                    if (reason.has_value()) {
+                        result->success = false;
+                        result->finish_code = reason.value();
+                        RCLCPP_WARN(this->get_logger(), "\033[1;33m[PREDICTIVE COLLISION REJECTED] %s\033[0m", reason.value().c_str());
+                        try { goal_handle->abort(result); } catch (...) {}
+                        return;
+                    }
+                }
             }
 
             rb::ComponentBasedCommandBuilder component_cmd_builder;
@@ -1827,6 +2290,7 @@ namespace rby1_ros2{
         }
     }
 
+#if 0
     template <typename ModelType>
     void RBY1_ROS2_DRIVER<ModelType>::motor_brake_callback(
         const std::shared_ptr<rby1_msgs::srv::StateOnOff::Request> request,
@@ -1892,22 +2356,28 @@ namespace rby1_ros2{
             RCLCPP_ERROR(this->get_logger(), "Brake command exception: %s", e.what());
         }
     }
+#endif
 
     template <typename ModelType>
     void RBY1_ROS2_DRIVER<ModelType>::cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg) {
         try {
-            double linear_y = msg->linear.y;
-            Eigen::Vector2d linear_vel(msg->linear.x, linear_y);
-            double angular_vel = msg->angular.z;
+            {
+                std::lock_guard<std::mutex> lock(stream_mutex_);
+                if (!stream_active_ || !stream_handler_) {
+                    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                                         "cmd_vel received but stream control is not active. Ignoring command.");
+                    return;
+                }
+            }
+
+            Eigen::Vector2d linear_vel(msg->linear.x, msg->linear.y);
+            Eigen::Vector2d acceleration_limit(robot_parameter_.se2_linear_acceleration_limit, robot_parameter_.se2_linear_acceleration_limit);
 
             rb::SE2VelocityCommandBuilder se2_cmd;
-            se2_cmd.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(0.5));
+            se2_cmd.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(1.0));
             se2_cmd.SetMinimumTime(robot_parameter_.se2_minimum_time);
-            se2_cmd.SetVelocity(linear_vel, angular_vel);
-            se2_cmd.SetAccelerationLimit(
-                Eigen::Vector2d(robot_parameter_.se2_linear_acceleration_limit, robot_parameter_.se2_linear_acceleration_limit),
-                robot_parameter_.se2_angular_acceleration_limit
-            );
+            se2_cmd.SetVelocity(linear_vel, msg->angular.z);
+            se2_cmd.SetAccelerationLimit(acceleration_limit, robot_parameter_.se2_angular_acceleration_limit);
 
             rb::MobilityCommandBuilder mobility_cmd;
             mobility_cmd.SetCommand(se2_cmd);
@@ -1918,7 +2388,12 @@ namespace rby1_ros2{
             rb::RobotCommandBuilder robot_cmd;
             robot_cmd.SetCommand(component_cmd);
 
-            robot_->SendCommand(robot_cmd);
+            {
+                std::lock_guard<std::mutex> lock(stream_mutex_);
+                if (stream_handler_) {
+                    stream_handler_->SendCommand(robot_cmd);
+                }
+            }
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Exception in cmd_vel_callback: %s", e.what());
         }
@@ -1959,6 +2434,265 @@ namespace rby1_ros2{
             response->message = "Persistent stream control deactivated.";
             RCLCPP_INFO(this->get_logger(), "Persistent stream control deactivated.");
         }
+    }
+
+    template <typename ModelType>
+    void RBY1_ROS2_DRIVER<ModelType>::set_trajectory_impedance_callback(
+        const std::shared_ptr<rby1_msgs::srv::SetTrajectoryImpedance::Request> request,
+        std::shared_ptr<rby1_msgs::srv::SetTrajectoryImpedance::Response> response) {
+
+        if (!request->state) {
+            trajectory_impedance_enabled_ = false;
+            response->success = true;
+            response->message = "Trajectory impedance control disabled. follow_joint_trajectory will use position control.";
+            RCLCPP_INFO(this->get_logger(), "[TRAJECTORY IMPEDANCE] Disabled.");
+            return;
+        }
+
+        // Validate stiffness size when provided
+        if (!request->stiffness.empty()) {
+            size_t expected = info_.torso_joint_idx.size() +
+                              info_.right_arm_joint_idx.size() +
+                              info_.left_arm_joint_idx.size() +
+                              info_.head_joint_idx.size();
+            if (request->stiffness.size() != expected) {
+                response->success = false;
+                response->message = "Invalid stiffness size: expected " + std::to_string(expected) +
+                                    " (torso+right+left+head), got " + std::to_string(request->stiffness.size());
+                RCLCPP_ERROR(this->get_logger(), "[TRAJECTORY IMPEDANCE] %s", response->message.c_str());
+                return;
+            }
+            trajectory_stiffness_ = request->stiffness;
+        } else {
+            // Default: 100.0 for all joints
+            size_t total = info_.torso_joint_idx.size() +
+                           info_.right_arm_joint_idx.size() +
+                           info_.left_arm_joint_idx.size() +
+                           info_.head_joint_idx.size();
+            trajectory_stiffness_.assign(total, 100.0);
+        }
+
+        trajectory_damping_ratio_ = (request->damping_ratio > 0.0) ? request->damping_ratio : 1.0;
+        trajectory_torque_limit_  = (request->torque_limit  > 0.0) ? request->torque_limit  : 10.0;
+        trajectory_impedance_enabled_ = true;
+
+        response->success = true;
+        response->message = "Trajectory impedance enabled. stiffness[" +
+                            std::to_string(trajectory_stiffness_.size()) + " joints], damping=" +
+                            std::to_string(trajectory_damping_ratio_) + ", torque_limit=" +
+                            std::to_string(trajectory_torque_limit_);
+        RCLCPP_INFO(this->get_logger(), "[TRAJECTORY IMPEDANCE] Enabled. %s", response->message.c_str());
+    }
+
+
+    template <typename ModelType>
+    void RBY1_ROS2_DRIVER<ModelType>::execute_collision_safety_retreat() {
+        RCLCPP_INFO(this->get_logger(), "[COLLISION SAFETY] Starting retreat to initial pose...");
+
+        // 1. Cancel control first and stop stream
+        robot_->CancelControl();
+        {
+            std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+            if (stream_handler_) {
+                stream_handler_.reset();
+            }
+            stream_active_ = false;
+        }
+
+        if (!has_initial_pose_ || initial_joint_positions_.empty()) {
+            RCLCPP_ERROR(this->get_logger(), "[COLLISION SAFETY] No initial pose saved. Cannot retreat.");
+            is_recovering_ = false;
+            return;
+        }
+
+        // 2. Enable/Recover Control Manager
+        if (!this->check_controll_manager()) {
+            RCLCPP_ERROR(this->get_logger(), "[COLLISION SAFETY] Failed to enable Control Manager for retreat.");
+            is_recovering_ = false;
+            return;
+        }
+
+        // Wait a bit to ensure it is ready
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+        // 3. Build Joint Position Command for all parts to go back to initial pose
+        rb::ComponentBasedCommandBuilder component_cmd_builder;
+        rb::BodyComponentBasedCommandBuilder body_comp;
+        bool use_body = false;
+        bool use_head = false;
+
+        // Torso
+        if (!info_.torso_joint_idx.empty()) {
+            Eigen::VectorXd torso_q(info_.torso_joint_idx.size());
+            for (size_t i = 0; i < info_.torso_joint_idx.size(); ++i) {
+                torso_q[i] = initial_joint_positions_[info_.torso_joint_idx[i]];
+            }
+            rb::JointPositionCommandBuilder b;
+            b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(10.0));
+            b.SetMinimumTime(10.0); // 5 seconds for safe return
+            b.SetPosition(torso_q);
+            body_comp.SetTorsoCommand(rb::TorsoCommandBuilder(b));
+            use_body = true;
+        }
+
+        // Right arm
+        if (!info_.right_arm_joint_idx.empty()) {
+            Eigen::VectorXd right_arm_q(info_.right_arm_joint_idx.size());
+            for (size_t i = 0; i < info_.right_arm_joint_idx.size(); ++i) {
+                right_arm_q[i] = initial_joint_positions_[info_.right_arm_joint_idx[i]];
+            }
+            rb::JointPositionCommandBuilder b;
+            b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(10.0));
+            b.SetMinimumTime(10.0);
+            b.SetPosition(right_arm_q);
+            body_comp.SetRightArmCommand(rb::ArmCommandBuilder(b));
+            use_body = true;
+        }
+
+        // Left arm
+        if (!info_.left_arm_joint_idx.empty()) {
+            Eigen::VectorXd left_arm_q(info_.left_arm_joint_idx.size());
+            for (size_t i = 0; i < info_.left_arm_joint_idx.size(); ++i) {
+                left_arm_q[i] = initial_joint_positions_[info_.left_arm_joint_idx[i]];
+            }
+            rb::JointPositionCommandBuilder b;
+            b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(10.0));
+            b.SetMinimumTime(10.0);
+            b.SetPosition(left_arm_q);
+            body_comp.SetLeftArmCommand(rb::ArmCommandBuilder(b));
+            use_body = true;
+        }
+
+        // Head
+        if (!info_.head_joint_idx.empty()) {
+            Eigen::VectorXd head_q(info_.head_joint_idx.size());
+            for (size_t i = 0; i < info_.head_joint_idx.size(); ++i) {
+                head_q[i] = initial_joint_positions_[info_.head_joint_idx[i]];
+            }
+            rb::JointPositionCommandBuilder b;
+            b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(10.0));
+            b.SetMinimumTime(10.0);
+            b.SetPosition(head_q);
+            component_cmd_builder.SetHeadCommand(rb::HeadCommandBuilder(b));
+            use_head = true;
+        }
+
+        if (use_body) {
+            component_cmd_builder.SetBodyCommand(rb::BodyCommandBuilder(body_comp));
+        }
+
+        if (use_body || use_head) {
+            try {
+                auto cmd_handler = robot_->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder), 10);
+                RCLCPP_INFO(this->get_logger(), "[COLLISION SAFETY] Retreat joint command sent. Waiting for completion...");
+                cmd_handler->WaitFor(10000); // Wait up to 6 seconds
+                RCLCPP_INFO(this->get_logger(), "[COLLISION SAFETY] Retreat completed.");
+            } catch (const std::exception& e) {
+                RCLCPP_ERROR(this->get_logger(), "[COLLISION SAFETY] Failed to send/execute retreat command: %s", e.what());
+            }
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        is_recovering_ = false;
+    }
+
+    template <typename ModelType>
+    void RBY1_ROS2_DRIVER<ModelType>::collision_safety_callback(
+        const std::shared_ptr<rby1_msgs::srv::StateOnOff::Request> request,
+        std::shared_ptr<rby1_msgs::srv::StateOnOff::Response> response) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        collision_recovery_enable_ = request->state;
+        response->success = true;
+        response->message = std::string("Collision recovery ") + (collision_recovery_enable_ ? "enabled" : "disabled") + ".";
+        RCLCPP_INFO(this->get_logger(), "Collision recovery set to %s", collision_recovery_enable_ ? "ON" : "OFF");
+    }
+
+    template <typename ModelType>
+    int RBY1_ROS2_DRIVER<ModelType>::get_link_index(const std::string& name) {
+        auto it = std::find(dyn_link_names_.begin(), dyn_link_names_.end(), name);
+        if (it != dyn_link_names_.end()) {
+            return std::distance(dyn_link_names_.begin(), it);
+        }
+        return -1;
+    }
+
+    template <typename ModelType>
+    std::optional<std::string> RBY1_ROS2_DRIVER<ModelType>::get_predicted_collision_reason(const Eigen::VectorXd& target_q) {
+        if (!dynamics_ || !dyn_state_) {
+            return std::nullopt;
+        }
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto temp_state = std::make_shared<rb::dyn::State<ModelType::kRobotDOF>>(*dyn_state_);
+        temp_state->SetQ(target_q);
+
+        dynamics_->ComputeForwardKinematics(temp_state);
+        auto cols = dynamics_->DetectCollisionsOrNearestLinks(temp_state, 20);
+
+        for (const auto& col : cols) {
+            if (col.distance < collision_threshold_) {
+                std::stringstream ss;
+                ss << "Collision predicted between [" << col.link1 << "] and [" << col.link2 
+                   << "] (distance: " << std::fixed << std::setprecision(4) << col.distance 
+                   << " m < threshold: " << collision_threshold_ << " m)";
+                return ss.str();
+            }
+        }
+        return std::nullopt;
+    }
+
+    template <typename ModelType>
+    std::optional<Eigen::VectorXd> RBY1_ROS2_DRIVER<ModelType>::solve_cartesian_ik(
+        const std::vector<typename rb::OptimalControl<ModelType::kRobotDOF>::LinkTarget>& link_targets) {
+        
+        if (!dynamics_ || !dyn_state_) {
+            return std::nullopt;
+        }
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        
+        // Clone current state as starting position for numerical IK
+        auto temp_state = std::make_shared<rb::dyn::State<ModelType::kRobotDOF>>(*dyn_state_);
+
+        // Setup OptimalControl solver
+        std::vector<unsigned int> joint_idx(ModelType::kRobotDOF);
+        std::iota(joint_idx.begin(), joint_idx.end(), 0);
+        rb::OptimalControl<ModelType::kRobotDOF> ik_solver(dynamics_, joint_idx);
+
+        double dt = 0.1;
+        int max_iterations = 50;
+        double tolerance = 1e-3;
+        bool converged = false;
+
+        typename rb::OptimalControl<ModelType::kRobotDOF>::Input in;
+        in.link_targets = link_targets;
+
+        Eigen::Vector<double, ModelType::kRobotDOF> q_lb = q_lower_;
+        Eigen::Vector<double, ModelType::kRobotDOF> q_ub = q_upper_;
+        Eigen::Vector<double, ModelType::kRobotDOF> qdot_ub = qdot_upper_;
+        Eigen::Vector<double, ModelType::kRobotDOF> qddot_ub = qddot_upper_;
+
+        for (int iter = 0; iter < max_iterations; ++iter) {
+            auto sol = ik_solver.Solve(in, temp_state, dt, 1.0, q_lb, q_ub, qdot_ub, qddot_ub, true);
+            if (!sol.has_value()) {
+                break;
+            }
+
+            // Step joint angles
+            Eigen::VectorXd q_next = temp_state->GetQ() + sol.value() * dt;
+            temp_state->SetQ(q_next);
+            temp_state->SetQdot(sol.value());
+
+            if (ik_solver.GetError() < tolerance) {
+                converged = true;
+                break;
+            }
+        }
+
+        if (converged) {
+            return temp_state->GetQ();
+        }
+        return std::nullopt;
     }
 
     // Explicit template instantiations
