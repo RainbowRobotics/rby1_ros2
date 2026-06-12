@@ -6,6 +6,7 @@
 #include <optional>
 #include <atomic>
 #include <fstream>
+#include <array>
 //ros2
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
@@ -129,6 +130,8 @@ namespace rby1_ros2{
             rclcpp_action::Server<Rby1JointCommand>::SharedPtr rby1_joint_command_action_server_;
             rclcpp_action::Server<Rby1CartesianCommand>::SharedPtr rby1_cartesian_command_action_server_;
             rclcpp_action::Server<FollowJointTrajectory>::SharedPtr follow_joint_trajectory_action_server_;
+            rclcpp_action::Server<Rby1JointCommand>::SharedPtr stream_joint_command_action_server_;
+            rclcpp_action::Server<Rby1CartesianCommand>::SharedPtr stream_cartesian_command_action_server_;
             
             rclcpp::Service<rby1_msgs::srv::StateOnOff>::SharedPtr power_service_;
             rclcpp::Service<rby1_msgs::srv::StateOnOff>::SharedPtr servo_service_;
@@ -220,10 +223,34 @@ namespace rby1_ros2{
             void handle_rby1_cartesian_accepted(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1CartesianCommand>> goal_handle);
             void execute_rby1_cartesian_command(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1CartesianCommand>> goal_handle);
 
+            // Stream Joint Command Action Handlers
+            rclcpp_action::GoalResponse handle_stream_joint_goal(
+                const rclcpp_action::GoalUUID& uuid,
+                std::shared_ptr<const Rby1JointCommand::Goal> goal);
+            rclcpp_action::CancelResponse handle_stream_joint_cancel(
+                const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1JointCommand>> goal_handle);
+            void handle_stream_joint_accepted(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1JointCommand>> goal_handle);
+            void execute_stream_joint_command(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1JointCommand>> goal_handle);
+
+            // Stream Cartesian Command Action Handlers
+            rclcpp_action::GoalResponse handle_stream_cartesian_goal(
+                const rclcpp_action::GoalUUID& uuid,
+                std::shared_ptr<const Rby1CartesianCommand::Goal> goal);
+            rclcpp_action::CancelResponse handle_stream_cartesian_cancel(
+                const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1CartesianCommand>> goal_handle);
+            void handle_stream_cartesian_accepted(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1CartesianCommand>> goal_handle);
+            void execute_stream_cartesian_command(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1CartesianCommand>> goal_handle);
+
             void cancel_control_callback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
                                          std::shared_ptr<std_srvs::srv::Trigger::Response> response);
             
             std::unique_ptr<rb::RobotCommandStreamHandler<ModelType>> stream_handler_;
             std::shared_ptr<rclcpp_action::ServerGoalHandle<FollowJointTrajectory>> active_follow_joint_trajectory_goal_{nullptr};
+
+            std::array<double, 25> stream_target_;
+            std::mutex stream_target_mutex_;
+            std::thread stream_thread_;
+            void stream_loop();
+            rclcpp::Time last_update_time_;
     };
 } 

@@ -34,7 +34,7 @@ from rby1_msgs.srv import StateOnOff
 class StreamCommand(Node):
     def __init__(self):
         super().__init__('stream_command')
-        self._action_client = ActionClient(self, Rby1JointCommand, 'robot_joint')
+        self._action_client = ActionClient(self, Rby1JointCommand, 'stream_joint_command')
         self.power_client = self.create_client(StateOnOff, 'robot_power')
         self.servo_client = self.create_client(StateOnOff, 'robot_servo')
         self.stream_control_client = self.create_client(StateOnOff, 'stream_control')

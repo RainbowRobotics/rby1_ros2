@@ -160,6 +160,20 @@ namespace rby1_ros2{
                         std::bind(&RBY1_ROS2_DRIVER<ModelType>::handle_rby1_cartesian_accepted, this, _1));
                 }
 
+                stream_joint_command_action_server_ = rclcpp_action::create_server<Rby1JointCommand>(
+                    this,
+                    "stream_joint_command",
+                    std::bind(&RBY1_ROS2_DRIVER<ModelType>::handle_stream_joint_goal, this, _1, _2),
+                    std::bind(&RBY1_ROS2_DRIVER<ModelType>::handle_stream_joint_cancel, this, _1),
+                    std::bind(&RBY1_ROS2_DRIVER<ModelType>::handle_stream_joint_accepted, this, _1));
+
+                stream_cartesian_command_action_server_ = rclcpp_action::create_server<Rby1CartesianCommand>(
+                    this,
+                    "stream_cartesian_command",
+                    std::bind(&RBY1_ROS2_DRIVER<ModelType>::handle_stream_cartesian_goal, this, _1, _2),
+                    std::bind(&RBY1_ROS2_DRIVER<ModelType>::handle_stream_cartesian_cancel, this, _1),
+                    std::bind(&RBY1_ROS2_DRIVER<ModelType>::handle_stream_cartesian_accepted, this, _1));
+
                 if (robot_initialize_flag){
                     RCLCPP_INFO(this->get_logger(), "[INITIALIZE] initialize_robot is true. Starting automatic power/servo initialization...");
 
@@ -266,6 +280,10 @@ namespace rby1_ros2{
 
     template <typename ModelType>
     RBY1_ROS2_DRIVER<ModelType>::~RBY1_ROS2_DRIVER(){
+        stream_active_ = false;
+        if (stream_thread_.joinable()) {
+            stream_thread_.join();
+        }
     }
 
     template <typename ModelType>
@@ -287,6 +305,7 @@ namespace rby1_ros2{
         this->declare_parameter<double>("se2_minimum_time", 1.0);
         this->declare_parameter<double>("se2_linear_acceleration_limit", 0.5);
         this->declare_parameter<double>("se2_angular_acceleration_limit", 0.5);
+        this->declare_parameter<double>("stream_hz", 15.0);
         
         this->declare_parameter<bool>("fault_reset_trigger", true);
         this->declare_parameter<double>("collision_threshold", 0.01);
@@ -1173,23 +1192,15 @@ namespace rby1_ros2{
             }
         }
 
-        // Auto-activate stream if not active
-        bool stream_was_inactive = false;
+        // Check if stream is active
         {
             std::lock_guard<std::mutex> stream_lock(stream_mutex_);
             if (!stream_active_ || !stream_handler_) {
-                try {
-                    stream_handler_ = robot_->CreateCommandStream();
-                    stream_active_ = true;
-                    stream_was_inactive = true;
-                    RCLCPP_INFO(this->get_logger(), "Auto-activated persistent stream control for action execution.");
-                } catch (const std::exception& e) {
-                    RCLCPP_ERROR(this->get_logger(), "Failed to auto-activate stream control: %s", e.what());
-                    result->error_code = FollowJointTrajectory::Result::INVALID_GOAL;
-                    result->error_string = "Failed to auto-activate stream: " + std::string(e.what());
-                    try { goal_handle->abort(result); } catch (...) {}
-                    return;
-                }
+                RCLCPP_WARN(this->get_logger(), "\033[1;33m[CONTROL REJECTED] FollowJointTrajectory rejected: Stream control is not active. Please activate stream control first.\033[0m");
+                result->error_code = FollowJointTrajectory::Result::INVALID_GOAL;
+                result->error_string = "Stream control is not active. Please activate stream control first.";
+                try { goal_handle->abort(result); } catch (...) {}
+                return;
             }
         }
 
@@ -1213,12 +1224,6 @@ namespace rby1_ros2{
 
                 if (is_preempted) {
                     RCLCPP_WARN(this->get_logger(), "FollowJointTrajectory execution preempted.");
-                    if (stream_was_inactive) {
-                        std::lock_guard<std::mutex> stream_lock(stream_mutex_);
-                        if (stream_handler_) stream_handler_.reset();
-                        stream_active_ = false;
-                        RCLCPP_INFO(this->get_logger(), "Auto-deactivated persistent stream control on preemption.");
-                    }
                     return;
                 }
 
@@ -1233,12 +1238,6 @@ namespace rby1_ros2{
                             active_follow_joint_trajectory_goal_ = nullptr;
                         }
                     }
-                    if (stream_was_inactive) {
-                        std::lock_guard<std::mutex> stream_lock(stream_mutex_);
-                        if (stream_handler_) stream_handler_.reset();
-                        stream_active_ = false;
-                        RCLCPP_INFO(this->get_logger(), "Auto-deactivated persistent stream control on cancel.");
-                    }
                     return;
                 }
 
@@ -1248,6 +1247,25 @@ namespace rby1_ros2{
                     }
                 }
 
+                // Update stream targets
+                {
+                    std::lock_guard<std::mutex> target_lock(stream_target_mutex_);
+                    for (size_t k = 0; k < info_.torso_joint_idx.size(); ++k) {
+                        stream_target_[3 + k] = q[info_.torso_joint_idx[k]];
+                    }
+                    for (size_t k = 0; k < info_.right_arm_joint_idx.size(); ++k) {
+                        stream_target_[9 + k] = q[info_.right_arm_joint_idx[k]];
+                    }
+                    for (size_t k = 0; k < info_.left_arm_joint_idx.size(); ++k) {
+                        stream_target_[16 + k] = q[info_.left_arm_joint_idx[k]];
+                    }
+                    for (size_t k = 0; k < info_.head_joint_idx.size(); ++k) {
+                        stream_target_[23 + k] = q[info_.head_joint_idx[k]];
+                    }
+                }
+
+                last_update_time_ = this->now();
+
                 double pt_time = 0.01;
                 if (i > 0) {
                     pt_time = (trajectory.points[i].time_from_start.sec + trajectory.points[i].time_from_start.nanosec * 1e-9) - 
@@ -1256,104 +1274,6 @@ namespace rby1_ros2{
                     pt_time = trajectory.points[0].time_from_start.sec + trajectory.points[0].time_from_start.nanosec * 1e-9;
                 }
                 if (pt_time <= 0.0) pt_time = 0.01;
-
-                double cmd_min_time = pt_time * 1.1;
-
-                Eigen::VectorXd torso_q(info_.torso_joint_idx.size());
-                for (size_t k = 0; k < info_.torso_joint_idx.size(); ++k) torso_q[k] = q[info_.torso_joint_idx[k]];
-
-                Eigen::VectorXd right_arm_q(info_.right_arm_joint_idx.size());
-                for (size_t k = 0; k < info_.right_arm_joint_idx.size(); ++k) right_arm_q[k] = q[info_.right_arm_joint_idx[k]];
-
-                Eigen::VectorXd left_arm_q(info_.left_arm_joint_idx.size());
-                for (size_t k = 0; k < info_.left_arm_joint_idx.size(); ++k) left_arm_q[k] = q[info_.left_arm_joint_idx[k]];
-
-                Eigen::VectorXd head_q(info_.head_joint_idx.size());
-                for (size_t k = 0; k < info_.head_joint_idx.size(); ++k) head_q[k] = q[info_.head_joint_idx[k]];
-
-                rb::BodyComponentBasedCommandBuilder body_comp_builder;
-                rb::ComponentBasedCommandBuilder comp_builder;
-
-                if (trajectory_impedance_enabled_) {
-                    // --- Impedance mode ---
-                    // JointImpedanceControlCommandBuilder is move-only (copy ctor deleted),
-                    // so each part must be built inline without a helper lambda.
-                    size_t torso_dof = info_.torso_joint_idx.size();
-                    size_t right_dof = info_.right_arm_joint_idx.size();
-                    size_t left_dof  = info_.left_arm_joint_idx.size();
-
-                    // Helper to slice stiffness from the stored full-body vector (fallback to 100.0)
-                    auto make_stiffness = [&](size_t offset, size_t dof) -> Eigen::VectorXd {
-                        if (trajectory_stiffness_.size() >= offset + dof) {
-                            return Eigen::Map<const Eigen::VectorXd>(trajectory_stiffness_.data() + offset, dof);
-                        }
-                        return Eigen::VectorXd::Constant(dof, 100.0);
-                    };
-
-                    // Torso
-                    {
-                        auto b = rb::JointImpedanceControlCommandBuilder();
-                        b.SetPosition(torso_q);
-                        b.SetMinimumTime(cmd_min_time);
-                        b.SetStiffness(make_stiffness(0, torso_dof));
-                        b.SetDampingRatio(trajectory_damping_ratio_);
-                        b.SetTorqueLimit(Eigen::VectorXd::Constant(torso_dof, trajectory_torque_limit_));
-                        body_comp_builder.SetTorsoCommand(rb::TorsoCommandBuilder(std::move(b)));
-                    }
-                    // Right arm
-                    {
-                        auto b = rb::JointImpedanceControlCommandBuilder();
-                        b.SetPosition(right_arm_q);
-                        b.SetMinimumTime(cmd_min_time);
-                        b.SetStiffness(make_stiffness(torso_dof, right_dof));
-                        b.SetDampingRatio(trajectory_damping_ratio_);
-                        b.SetTorqueLimit(Eigen::VectorXd::Constant(right_dof, trajectory_torque_limit_));
-                        body_comp_builder.SetRightArmCommand(rb::ArmCommandBuilder(std::move(b)));
-                    }
-                    // Left arm
-                    {
-                        auto b = rb::JointImpedanceControlCommandBuilder();
-                        b.SetPosition(left_arm_q);
-                        b.SetMinimumTime(cmd_min_time);
-                        b.SetStiffness(make_stiffness(torso_dof + right_dof, left_dof));
-                        b.SetDampingRatio(trajectory_damping_ratio_);
-                        b.SetTorqueLimit(Eigen::VectorXd::Constant(left_dof, trajectory_torque_limit_));
-                        body_comp_builder.SetLeftArmCommand(rb::ArmCommandBuilder(std::move(b)));
-                    }
-                    // Head does not support impedance — fall back to position control
-                    rb::HeadCommandBuilder head_builder;
-                    head_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(head_q).SetMinimumTime(cmd_min_time));
-                    comp_builder.SetHeadCommand(head_builder);
-                } else {
-                    // --- Default position control mode ---
-                    rb::TorsoCommandBuilder torso_builder;
-                    torso_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(torso_q).SetMinimumTime(cmd_min_time));
-
-                    rb::ArmCommandBuilder right_arm_builder;
-                    right_arm_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(right_arm_q).SetMinimumTime(cmd_min_time));
-
-                    rb::ArmCommandBuilder left_arm_builder;
-                    left_arm_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(left_arm_q).SetMinimumTime(cmd_min_time));
-
-                    rb::HeadCommandBuilder head_builder;
-                    head_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(head_q).SetMinimumTime(cmd_min_time));
-
-                    body_comp_builder.SetTorsoCommand(torso_builder);
-                    body_comp_builder.SetRightArmCommand(right_arm_builder);
-                    body_comp_builder.SetLeftArmCommand(left_arm_builder);
-                    comp_builder.SetHeadCommand(head_builder);
-                }
-
-
-                comp_builder.SetBodyCommand(rb::BodyCommandBuilder(std::move(body_comp_builder)));
-
-                {
-                    std::lock_guard<std::mutex> lock(stream_mutex_);
-                    if (!stream_handler_) {
-                        throw std::runtime_error("Stream was deactivated during transmission.");
-                    }
-                    stream_handler_->SendCommand(rb::RobotCommandBuilder().SetCommand(comp_builder));
-                }
 
                 auto action_feedback = std::make_shared<FollowJointTrajectory::Feedback>();
                 action_feedback->joint_names = trajectory.joint_names;
@@ -1370,20 +1290,12 @@ namespace rby1_ros2{
                 total_duration = trajectory.points.back().time_from_start.sec + 
                                  trajectory.points.back().time_from_start.nanosec * 1e-9;
             }
-            //uint32_t wait_ms = static_cast<uint32_t>((total_duration + 2.0) * 1000.0);
             
             bool wait_success = false;
-            bool has_stream = false;
             {
-                std::lock_guard<std::mutex> lock(stream_mutex_);
-                if (stream_handler_) {
-                    has_stream = true;
-                }
-            }
-            if (has_stream) {
                 rclcpp::Rate wait_rate(100);
                 auto start_time = this->now();
-                double total_timeout = total_duration + 2.0;
+                double total_timeout = total_duration + 0.5;
 
                 while (rclcpp::ok()) {
                     bool is_preempted = false;
@@ -1408,19 +1320,9 @@ namespace rby1_ros2{
                                 active_follow_joint_trajectory_goal_ = nullptr;
                             }
                         }
-                        if (stream_was_inactive) {
-                            std::lock_guard<std::mutex> stream_lock(stream_mutex_);
-                            if (stream_handler_) stream_handler_.reset();
-                            stream_active_ = false;
-                            RCLCPP_INFO(this->get_logger(), "Auto-deactivated persistent stream control on cancel.");
-                        }
                         return;
                     }
                     if ((this->now() - start_time).seconds() > total_timeout) {
-                        break;
-                    }
-                    auto cm_state = robot_->GetControlManagerState();
-                    if (cm_state.control_state != rb::ControlManagerState::ControlState::kExecuting) {
                         wait_success = true;
                         break;
                     }
@@ -1451,16 +1353,6 @@ namespace rby1_ros2{
             result->error_code = FollowJointTrajectory::Result::INVALID_GOAL;
             result->error_string = std::string("Error during execution: ") + e.what();
             try { goal_handle->abort(result); } catch (...) {}
-        }
-
-        // Clean up stream if it was auto-activated for this command
-        if (stream_was_inactive) {
-            std::lock_guard<std::mutex> stream_lock(stream_mutex_);
-            if (stream_handler_) {
-                stream_handler_.reset();
-            }
-            stream_active_ = false;
-            RCLCPP_INFO(this->get_logger(), "Auto-deactivated persistent stream control.");
         }
     }
 
@@ -1503,6 +1395,17 @@ namespace rby1_ros2{
     void RBY1_ROS2_DRIVER<ModelType>::execute_rby1_joint_command(
         const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1JointCommand>> goal_handle) {
         is_control_canceled_ = false;
+        auto result = std::make_shared<Rby1JointCommand::Result>();
+        {
+            std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+            if (stream_active_) {
+                result->success = false;
+                result->finish_code = "Stream active: Joint command rejected";
+                RCLCPP_WARN(this->get_logger(), "\033[1;33m[CONTROL REJECTED] Joint command rejected because streaming is active.\033[0m");
+                try { goal_handle->abort(result); } catch (...) {}
+                return;
+            }
+        }
         {
             std::lock_guard<std::mutex> lock(mutex_);
             auto current_state = robot_->GetState();
@@ -1517,7 +1420,6 @@ namespace rby1_ros2{
         } guard{is_controlling_};
 
         const auto goal = goal_handle->get_goal();
-        auto result = std::make_shared<Rby1JointCommand::Result>();
 
         try {
             auto cm_state_val = robot_->GetControlManagerState().state;
@@ -1869,24 +1771,6 @@ namespace rby1_ros2{
                 component_cmd_builder.SetBodyCommand(rb::BodyCommandBuilder(body_comp));
             }
 
-            bool has_stream = false;
-            {
-                std::lock_guard<std::mutex> stream_lock(stream_mutex_);
-                if (stream_active_ && stream_handler_) {
-                    has_stream = true;
-                    stream_handler_->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder));
-                }
-            }
-
-            if (has_stream) {
-                RCLCPP_INFO(this->get_logger(), "Sent Rby1JointCommand via persistent stream_handler_.");
-                result->success = true;
-                result->finish_code = "kOk";
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                try { goal_handle->succeed(result); } catch (...) {}
-                return;
-            }
-
             auto cmd_handler = robot_->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder), goal->priority);
             
             rclcpp::Rate rate(10);
@@ -1980,6 +1864,17 @@ namespace rby1_ros2{
     void RBY1_ROS2_DRIVER<ModelType>::execute_rby1_cartesian_command(
         const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1CartesianCommand>> goal_handle) {
         is_control_canceled_ = false;
+        auto result = std::make_shared<Rby1CartesianCommand::Result>();
+        {
+            std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+            if (stream_active_) {
+                result->success = false;
+                result->finish_code = "Stream active: Cartesian command rejected";
+                RCLCPP_WARN(this->get_logger(), "\033[1;33m[CONTROL REJECTED] Cartesian command rejected because streaming is active.\033[0m");
+                try { goal_handle->abort(result); } catch (...) {}
+                return;
+            }
+        }
         {
             std::lock_guard<std::mutex> lock(mutex_);
             auto current_state = robot_->GetState();
@@ -1994,7 +1889,6 @@ namespace rby1_ros2{
         } guard{is_controlling_};
 
         const auto goal = goal_handle->get_goal();
-        auto result = std::make_shared<Rby1CartesianCommand::Result>();
 
         try {
             auto cm_state_val = robot_->GetControlManagerState().state;
@@ -2243,24 +2137,6 @@ namespace rby1_ros2{
             }
 
             component_cmd_builder.SetBodyCommand(rb::BodyCommandBuilder(body_comp));
-
-            bool has_stream = false;
-            {
-                std::lock_guard<std::mutex> stream_lock(stream_mutex_);
-                if (stream_active_ && stream_handler_) {
-                    has_stream = true;
-                    stream_handler_->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder));
-                }
-            }
-
-            if (has_stream) {
-                RCLCPP_INFO(this->get_logger(), "Sent Rby1CartesianCommand via persistent stream_handler_.");
-                result->success = true;
-                result->finish_code = "kOk";
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                try { goal_handle->succeed(result); } catch (...) {}
-                return;
-            }
 
             auto cmd_handler = robot_->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder), goal->priority);
             
@@ -2538,30 +2414,14 @@ namespace rby1_ros2{
                 }
             }
 
-            Eigen::Vector2d linear_vel(msg->linear.x, msg->linear.y);
-            Eigen::Vector2d acceleration_limit(robot_parameter_.se2_linear_acceleration_limit, robot_parameter_.se2_linear_acceleration_limit);
-
-            rb::SE2VelocityCommandBuilder se2_cmd;
-            se2_cmd.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(1.0));
-            se2_cmd.SetMinimumTime(robot_parameter_.se2_minimum_time);
-            se2_cmd.SetVelocity(linear_vel, msg->angular.z);
-            se2_cmd.SetAccelerationLimit(acceleration_limit, robot_parameter_.se2_angular_acceleration_limit);
-
-            rb::MobilityCommandBuilder mobility_cmd;
-            mobility_cmd.SetCommand(se2_cmd);
-
-            rb::ComponentBasedCommandBuilder component_cmd;
-            component_cmd.SetMobilityCommand(mobility_cmd);
-
-            rb::RobotCommandBuilder robot_cmd;
-            robot_cmd.SetCommand(component_cmd);
-
             {
-                std::lock_guard<std::mutex> lock(stream_mutex_);
-                if (stream_handler_) {
-                    stream_handler_->SendCommand(robot_cmd);
-                }
+                std::lock_guard<std::mutex> target_lock(stream_target_mutex_);
+                stream_target_[0] = msg->linear.x;
+                stream_target_[1] = msg->linear.y;
+                stream_target_[2] = msg->angular.z;
             }
+
+            last_update_time_ = this->now();
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Exception in cmd_vel_callback: %s", e.what());
         }
@@ -2583,7 +2443,34 @@ namespace rby1_ros2{
             try {
                 // When stream is ON, create command stream
                 stream_handler_ = robot_->CreateCommandStream();
+                
+                // Initialize targets to current state (maintain pose)
+                auto current_state = robot_->GetState();
+                {
+                    std::lock_guard<std::mutex> target_lock(stream_target_mutex_);
+                    stream_target_[0] = 0.0;
+                    stream_target_[1] = 0.0;
+                    stream_target_[2] = 0.0;
+                    for (size_t i = 0; i < info_.torso_joint_idx.size(); ++i) {
+                        stream_target_[3 + i] = current_state.position[info_.torso_joint_idx[i]];
+                    }
+                    for (size_t i = 0; i < info_.right_arm_joint_idx.size(); ++i) {
+                        stream_target_[9 + i] = current_state.position[info_.right_arm_joint_idx[i]];
+                    }
+                    for (size_t i = 0; i < info_.left_arm_joint_idx.size(); ++i) {
+                        stream_target_[16 + i] = current_state.position[info_.left_arm_joint_idx[i]];
+                    }
+                    for (size_t i = 0; i < info_.head_joint_idx.size(); ++i) {
+                        stream_target_[23 + i] = current_state.position[info_.head_joint_idx[i]];
+                    }
+                }
+                
+                last_update_time_ = this->now();
                 stream_active_ = true;
+                
+                // Start background thread
+                stream_thread_ = std::thread(&RBY1_ROS2_DRIVER<ModelType>::stream_loop, this);
+
                 response->success = true;
                 response->message = "Persistent stream control activated successfully.";
                 RCLCPP_INFO(this->get_logger(), "Persistent stream control activated.");
@@ -2594,10 +2481,13 @@ namespace rby1_ros2{
             }
         } else {
             std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+            stream_active_ = false;
+            if (stream_thread_.joinable()) {
+                stream_thread_.join();
+            }
             if (stream_handler_) {
                 stream_handler_.reset();
             }
-            stream_active_ = false;
             response->success = true;
             response->message = "Persistent stream control deactivated.";
             RCLCPP_INFO(this->get_logger(), "Persistent stream control deactivated.");
@@ -2861,6 +2751,522 @@ namespace rby1_ros2{
             return temp_state->GetQ();
         }
         return std::nullopt;
+    }
+
+    template <typename ModelType>
+    void RBY1_ROS2_DRIVER<ModelType>::stream_loop() {
+        double stream_hz = 15.0;
+        this->get_parameter("stream_hz", stream_hz);
+        if (stream_hz <= 0.0) stream_hz = 15.0;
+
+        double minimum_time = (1.0 / stream_hz) * 1.1;
+        rclcpp::Rate rate(stream_hz);
+
+        RCLCPP_INFO(this->get_logger(), "Streaming thread started at %.1f Hz (min_time: %.4f s)", stream_hz, minimum_time);
+
+        while (rclcpp::ok() && stream_active_) {
+            std::array<double, 25> targets;
+            
+            // Watchdog check: check if last update was more than 0.5 seconds ago
+            if ((this->now() - last_update_time_).seconds() > 0.5) {
+                RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000, 
+                                     "\033[1;31m[STREAM WATCHDOG] Control node connection timeout. Stopping mobility and holding joints.\033[0m");
+                
+                // Set mobility velocities to zero
+                targets[0] = 0.0;
+                targets[1] = 0.0;
+                targets[2] = 0.0;
+                
+                // Hold current joints position
+                try {
+                    auto current_state = robot_->GetState();
+                    for (size_t i = 0; i < info_.torso_joint_idx.size(); ++i) {
+                        targets[3 + i] = current_state.position[info_.torso_joint_idx[i]];
+                    }
+                    for (size_t i = 0; i < info_.right_arm_joint_idx.size(); ++i) {
+                        targets[9 + i] = current_state.position[info_.right_arm_joint_idx[i]];
+                    }
+                    for (size_t i = 0; i < info_.left_arm_joint_idx.size(); ++i) {
+                        targets[16 + i] = current_state.position[info_.left_arm_joint_idx[i]];
+                    }
+                    for (size_t i = 0; i < info_.head_joint_idx.size(); ++i) {
+                        targets[23 + i] = current_state.position[info_.head_joint_idx[i]];
+                    }
+                    // Update stream_target_ as well so that if connection resumes, it starts from current held pose
+                    {
+                        std::lock_guard<std::mutex> target_lock(stream_target_mutex_);
+                        stream_target_ = targets;
+                    }
+                } catch (const std::exception& e) {
+                    RCLCPP_ERROR(this->get_logger(), "Failed to get state in stream watchdog: %s", e.what());
+                    rate.sleep();
+                    continue;
+                }
+            } else {
+                std::lock_guard<std::mutex> target_lock(stream_target_mutex_);
+                targets = stream_target_;
+            }
+
+            // Build Command Packet
+            // 1. Mobility Command
+            Eigen::Vector2d linear_vel(targets[0], targets[1]);
+            double angular_z = targets[2];
+            Eigen::Vector2d acceleration_limit(robot_parameter_.se2_linear_acceleration_limit, robot_parameter_.se2_linear_acceleration_limit);
+
+            rb::SE2VelocityCommandBuilder se2_cmd;
+            se2_cmd.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(1.0));
+            se2_cmd.SetMinimumTime(minimum_time);
+            se2_cmd.SetVelocity(linear_vel, angular_z);
+            se2_cmd.SetAccelerationLimit(acceleration_limit, robot_parameter_.se2_angular_acceleration_limit);
+
+            rb::MobilityCommandBuilder mobility_cmd;
+            mobility_cmd.SetCommand(se2_cmd);
+
+            // 2. Body Command (Torso, Arm, Left Arm, Head)
+            Eigen::VectorXd torso_q(info_.torso_joint_idx.size());
+            for (size_t i = 0; i < info_.torso_joint_idx.size(); ++i) torso_q[i] = targets[3 + i];
+
+            Eigen::VectorXd right_arm_q(info_.right_arm_joint_idx.size());
+            for (size_t i = 0; i < info_.right_arm_joint_idx.size(); ++i) right_arm_q[i] = targets[9 + i];
+
+            Eigen::VectorXd left_arm_q(info_.left_arm_joint_idx.size());
+            for (size_t i = 0; i < info_.left_arm_joint_idx.size(); ++i) left_arm_q[i] = targets[16 + i];
+
+            Eigen::VectorXd head_q(info_.head_joint_idx.size());
+            for (size_t i = 0; i < info_.head_joint_idx.size(); ++i) head_q[i] = targets[23 + i];
+
+            rb::BodyComponentBasedCommandBuilder body_comp_builder;
+            rb::ComponentBasedCommandBuilder comp_builder;
+
+            if (trajectory_impedance_enabled_) {
+                size_t torso_dof = info_.torso_joint_idx.size();
+                size_t right_dof = info_.right_arm_joint_idx.size();
+                size_t left_dof  = info_.left_arm_joint_idx.size();
+
+                auto make_stiffness = [&](size_t offset, size_t dof) -> Eigen::VectorXd {
+                    if (trajectory_stiffness_.size() >= offset + dof) {
+                        return Eigen::Map<const Eigen::VectorXd>(trajectory_stiffness_.data() + offset, dof);
+                    }
+                    return Eigen::VectorXd::Constant(dof, 100.0);
+                };
+
+                // Torso
+                {
+                    auto b = rb::JointImpedanceControlCommandBuilder();
+                    b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(1e6));
+                    b.SetPosition(torso_q);
+                    b.SetMinimumTime(minimum_time);
+                    b.SetStiffness(make_stiffness(0, torso_dof));
+                    b.SetDampingRatio(trajectory_damping_ratio_);
+                    b.SetTorqueLimit(Eigen::VectorXd::Constant(torso_dof, trajectory_torque_limit_));
+                    body_comp_builder.SetTorsoCommand(rb::TorsoCommandBuilder(std::move(b)));
+                }
+                // Right Arm
+                {
+                    auto b = rb::JointImpedanceControlCommandBuilder();
+                    b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(1e6));
+                    b.SetPosition(right_arm_q);
+                    b.SetMinimumTime(minimum_time);
+                    b.SetStiffness(make_stiffness(torso_dof, right_dof));
+                    b.SetDampingRatio(trajectory_damping_ratio_);
+                    b.SetTorqueLimit(Eigen::VectorXd::Constant(right_dof, trajectory_torque_limit_));
+                    body_comp_builder.SetRightArmCommand(rb::ArmCommandBuilder(std::move(b)));
+                }
+                // Left Arm
+                {
+                    auto b = rb::JointImpedanceControlCommandBuilder();
+                    b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(1e6));
+                    b.SetPosition(left_arm_q);
+                    b.SetMinimumTime(minimum_time);
+                    b.SetStiffness(make_stiffness(torso_dof + right_dof, left_dof));
+                    b.SetDampingRatio(trajectory_damping_ratio_);
+                    b.SetTorqueLimit(Eigen::VectorXd::Constant(left_dof, trajectory_torque_limit_));
+                    body_comp_builder.SetLeftArmCommand(rb::ArmCommandBuilder(std::move(b)));
+                }
+                // Head (Position fallback)
+                {
+                    auto b = rb::JointPositionCommandBuilder();
+                    b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(1e6));
+                    b.SetPosition(head_q);
+                    b.SetMinimumTime(minimum_time);
+                    comp_builder.SetHeadCommand(rb::HeadCommandBuilder(b));
+                }
+            } else {
+                rb::TorsoCommandBuilder torso_builder;
+                torso_builder.SetCommand(rb::JointPositionCommandBuilder()
+                    .SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(1e6))
+                    .SetPosition(torso_q)
+                    .SetMinimumTime(minimum_time));
+
+                rb::ArmCommandBuilder right_arm_builder;
+                right_arm_builder.SetCommand(rb::JointPositionCommandBuilder()
+                    .SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(1e6))
+                    .SetPosition(right_arm_q)
+                    .SetMinimumTime(minimum_time));
+
+                rb::ArmCommandBuilder left_arm_builder;
+                left_arm_builder.SetCommand(rb::JointPositionCommandBuilder()
+                    .SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(1e6))
+                    .SetPosition(left_arm_q)
+                    .SetMinimumTime(minimum_time));
+
+                rb::HeadCommandBuilder head_builder;
+                head_builder.SetCommand(rb::JointPositionCommandBuilder()
+                    .SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(1e6))
+                    .SetPosition(head_q)
+                    .SetMinimumTime(minimum_time));
+
+                body_comp_builder.SetTorsoCommand(torso_builder);
+                body_comp_builder.SetRightArmCommand(right_arm_builder);
+                body_comp_builder.SetLeftArmCommand(left_arm_builder);
+                comp_builder.SetHeadCommand(head_builder);
+            }
+
+            comp_builder.SetBodyCommand(rb::BodyCommandBuilder(std::move(body_comp_builder)));
+            comp_builder.SetMobilityCommand(mobility_cmd);
+
+            rb::RobotCommandBuilder robot_cmd;
+            robot_cmd.SetCommand(comp_builder);
+
+            try {
+                std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+                if (stream_handler_) {
+                    stream_handler_->SendCommand(robot_cmd);
+                }
+            } catch (const std::exception& e) {
+                RCLCPP_ERROR(this->get_logger(), "Error in stream thread SendCommand: %s", e.what());
+            }
+
+            rate.sleep();
+        }
+        RCLCPP_INFO(this->get_logger(), "Streaming thread stopped.");
+    }
+
+    template <typename ModelType>
+    rclcpp_action::GoalResponse RBY1_ROS2_DRIVER<ModelType>::handle_stream_joint_goal(
+        const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const Rby1JointCommand::Goal> goal) {
+        RCLCPP_INFO(this->get_logger(), "Received stream_joint_command request");
+        (void)uuid;
+        (void)goal;
+        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+    }
+
+    template <typename ModelType>
+    rclcpp_action::CancelResponse RBY1_ROS2_DRIVER<ModelType>::handle_stream_joint_cancel(
+        const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1JointCommand>> goal_handle) {
+        RCLCPP_INFO(this->get_logger(), "Received request to cancel stream_joint_command goal");
+        (void)goal_handle;
+        return rclcpp_action::CancelResponse::ACCEPT;
+    }
+
+    template <typename ModelType>
+    void RBY1_ROS2_DRIVER<ModelType>::handle_stream_joint_accepted(
+        const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1JointCommand>> goal_handle) {
+        using namespace std::placeholders;
+        std::thread{std::bind(&RBY1_ROS2_DRIVER<ModelType>::execute_stream_joint_command, this, _1), goal_handle}.detach();
+    }
+
+    template <typename ModelType>
+    rclcpp_action::GoalResponse RBY1_ROS2_DRIVER<ModelType>::handle_stream_cartesian_goal(
+        const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const Rby1CartesianCommand::Goal> goal) {
+        RCLCPP_INFO(this->get_logger(), "Received stream_cartesian_command request");
+        (void)uuid;
+        (void)goal;
+        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+    }
+
+    template <typename ModelType>
+    rclcpp_action::CancelResponse RBY1_ROS2_DRIVER<ModelType>::handle_stream_cartesian_cancel(
+        const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1CartesianCommand>> goal_handle) {
+        RCLCPP_INFO(this->get_logger(), "Received request to cancel stream_cartesian_command goal");
+        (void)goal_handle;
+        return rclcpp_action::CancelResponse::ACCEPT;
+    }
+
+    template <typename ModelType>
+    void RBY1_ROS2_DRIVER<ModelType>::handle_stream_cartesian_accepted(
+        const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1CartesianCommand>> goal_handle) {
+        using namespace std::placeholders;
+        std::thread{std::bind(&RBY1_ROS2_DRIVER<ModelType>::execute_stream_cartesian_command, this, _1), goal_handle}.detach();
+    }
+
+    template <typename ModelType>
+    void RBY1_ROS2_DRIVER<ModelType>::execute_stream_joint_command(
+        const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1JointCommand>> goal_handle) {
+        
+        auto result = std::make_shared<Rby1JointCommand::Result>();
+        
+        // 1. Check if stream is active
+        {
+            std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+            if (!stream_active_ || !stream_handler_) {
+                result->success = false;
+                result->finish_code = "Stream is not active. Please activate stream control first.";
+                RCLCPP_WARN(this->get_logger(), "\033[1;33m[CONTROL REJECTED] stream_joint_command rejected: Stream is not active.\033[0m");
+                try { goal_handle->abort(result); } catch (...) {}
+                return;
+            }
+        }
+
+        const auto goal = goal_handle->get_goal();
+        
+        // 2. Parse positions and update targets
+        {
+            std::lock_guard<std::mutex> target_lock(stream_target_mutex_);
+            
+            auto update_target = [&](const rby1_msgs::msg::JointCommand& cmd, const std::string& part) {
+                if (cmd.position.empty()) return;
+                
+                if (part == "torso") {
+                    for (size_t i = 0; i < cmd.position.size() && i < info_.torso_joint_idx.size(); ++i) {
+                        stream_target_[3 + i] = cmd.position[i];
+                    }
+                } else if (part == "right_arm") {
+                    for (size_t i = 0; i < cmd.position.size() && i < info_.right_arm_joint_idx.size(); ++i) {
+                        stream_target_[9 + i] = cmd.position[i];
+                    }
+                } else if (part == "left_arm") {
+                    for (size_t i = 0; i < cmd.position.size() && i < info_.left_arm_joint_idx.size(); ++i) {
+                        stream_target_[16 + i] = cmd.position[i];
+                    }
+                } else if (part == "head") {
+                    for (size_t i = 0; i < cmd.position.size() && i < info_.head_joint_idx.size(); ++i) {
+                        stream_target_[23 + i] = cmd.position[i];
+                    }
+                }
+            };
+            
+            update_target(goal->torso, "torso");
+            update_target(goal->right_arm, "right_arm");
+            update_target(goal->left_arm, "left_arm");
+            update_target(goal->head, "head");
+        }
+        
+        last_update_time_ = this->now();
+
+        // 3. Find max minimum_time to determine wait_time
+        double wait_time = 0.0;
+        if (!goal->torso.position.empty()) wait_time = std::max(wait_time, goal->torso.minimum_time);
+        if (!goal->right_arm.position.empty()) wait_time = std::max(wait_time, goal->right_arm.minimum_time);
+        if (!goal->left_arm.position.empty()) wait_time = std::max(wait_time, goal->left_arm.minimum_time);
+        if (!goal->head.position.empty()) wait_time = std::max(wait_time, goal->head.minimum_time);
+        
+        if (wait_time <= 0.0) wait_time = 0.1; // Default fallback
+
+        // 4. Wait loop while checking cancel
+        rclcpp::Rate wait_rate(100);
+        auto start_time = this->now();
+        bool is_canceled = false;
+        
+        while (rclcpp::ok()) {
+            if (goal_handle->is_canceling()) {
+                is_canceled = true;
+                break;
+            }
+            if ((this->now() - start_time).seconds() > wait_time) {
+                break;
+            }
+            wait_rate.sleep();
+        }
+
+        // 5. Handle cancel or success
+        if (is_canceled) {
+            RCLCPP_WARN(this->get_logger(), "stream_joint_command canceled. Holding current pose.");
+            try {
+                auto current_state = robot_->GetState();
+                std::lock_guard<std::mutex> target_lock(stream_target_mutex_);
+                for (size_t i = 0; i < info_.torso_joint_idx.size(); ++i) {
+                    stream_target_[3 + i] = current_state.position[info_.torso_joint_idx[i]];
+                }
+                for (size_t i = 0; i < info_.right_arm_joint_idx.size(); ++i) {
+                    stream_target_[9 + i] = current_state.position[info_.right_arm_joint_idx[i]];
+                }
+                for (size_t i = 0; i < info_.left_arm_joint_idx.size(); ++i) {
+                    stream_target_[16 + i] = current_state.position[info_.left_arm_joint_idx[i]];
+                }
+                for (size_t i = 0; i < info_.head_joint_idx.size(); ++i) {
+                    stream_target_[23 + i] = current_state.position[info_.head_joint_idx[i]];
+                }
+            } catch (const std::exception& e) {
+                RCLCPP_ERROR(this->get_logger(), "Failed to get state on stream action cancel: %s", e.what());
+            }
+            result->success = false;
+            result->finish_code = "kCanceled";
+            try { goal_handle->canceled(result); } catch (...) {}
+            return;
+        }
+
+        result->success = true;
+        result->finish_code = "kOk";
+        try { goal_handle->succeed(result); } catch (...) {}
+    }
+
+    template <typename ModelType>
+    void RBY1_ROS2_DRIVER<ModelType>::execute_stream_cartesian_command(
+        const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1CartesianCommand>> goal_handle) {
+        
+        auto result = std::make_shared<Rby1CartesianCommand::Result>();
+        
+        // 1. Check if stream is active
+        {
+            std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+            if (!stream_active_ || !stream_handler_) {
+                result->success = false;
+                result->finish_code = "Stream is not active. Please activate stream control first.";
+                RCLCPP_WARN(this->get_logger(), "\033[1;33m[CONTROL REJECTED] stream_cartesian_command rejected: Stream is not active.\033[0m");
+                try { goal_handle->abort(result); } catch (...) {}
+                return;
+            }
+        }
+
+        const auto goal = goal_handle->get_goal();
+
+        // 2. Parse Cartesian commands and solve IK
+        std::vector<typename rb::OptimalControl<ModelType::kRobotDOF>::LinkTarget> link_targets;
+        
+        auto add_target_helper = [&](const rby1_msgs::msg::CartesianCommand& cmd) -> bool {
+            if (cmd.ref_link.empty() && cmd.target_link.empty()) return true;
+            if (cmd.ref_link.empty() || cmd.target_link.empty()) return false;
+            
+            int ref_idx = get_link_index(cmd.ref_link);
+            int target_idx = get_link_index(cmd.target_link);
+            if (ref_idx == -1 || target_idx == -1) return false;
+            
+            typename rb::OptimalControl<ModelType::kRobotDOF>::LinkTarget target;
+            target.ref_link_index = ref_idx;
+            target.link_index = target_idx;
+            
+            Eigen::Quaterniond q(cmd.transform.rotation.w, cmd.transform.rotation.x, cmd.transform.rotation.y, cmd.transform.rotation.z);
+            Eigen::Vector3d t(cmd.transform.translation.x, cmd.transform.translation.y, cmd.transform.translation.z);
+            
+            rb::math::SE3::MatrixType T = rb::math::SE3::MatrixType::Identity();
+            T.block(0, 0, 3, 3) = q.toRotationMatrix();
+            T.block(0, 3, 3, 1) = t;
+            target.T = T;
+            
+            target.weight_position = 1000.0;
+            target.weight_orientation = 100.0;
+            
+            link_targets.push_back(target);
+            return true;
+        };
+
+        bool ok = true;
+        ok &= add_target_helper(goal->torso);
+        ok &= add_target_helper(goal->right_arm);
+        ok &= add_target_helper(goal->left_arm);
+
+        if (!ok || link_targets.empty()) {
+            result->success = false;
+            result->finish_code = "Invalid Cartesian targets";
+            RCLCPP_WARN(this->get_logger(), "stream_cartesian_command: Invalid Cartesian targets");
+            try { goal_handle->abort(result); } catch (...) {}
+            return;
+        }
+
+        auto solved_q = solve_cartesian_ik(link_targets);
+        if (!solved_q.has_value()) {
+            result->success = false;
+            result->finish_code = "Failed to solve Inverse Kinematics";
+            RCLCPP_WARN(this->get_logger(), "stream_cartesian_command: Failed to solve Inverse Kinematics");
+            try { goal_handle->abort(result); } catch (...) {}
+            return;
+        }
+
+        // 3. Map solved joint values to stream_target_
+        {
+            std::lock_guard<std::mutex> target_lock(stream_target_mutex_);
+            for (size_t k = 0; k < dyn_joint_names_.size(); ++k) {
+                std::string joint_name = dyn_joint_names_[k];
+                double pos_val = solved_q.value()[k];
+                
+                // torso
+                for (size_t i = 0; i < info_.torso_joint_idx.size(); ++i) {
+                    if (info_.joint_infos[info_.torso_joint_idx[i]].name == joint_name) {
+                        stream_target_[3 + i] = pos_val;
+                        break;
+                    }
+                }
+                // right_arm
+                for (size_t i = 0; i < info_.right_arm_joint_idx.size(); ++i) {
+                    if (info_.joint_infos[info_.right_arm_joint_idx[i]].name == joint_name) {
+                        stream_target_[9 + i] = pos_val;
+                        break;
+                    }
+                }
+                // left_arm
+                for (size_t i = 0; i < info_.left_arm_joint_idx.size(); ++i) {
+                    if (info_.joint_infos[info_.left_arm_joint_idx[i]].name == joint_name) {
+                        stream_target_[16 + i] = pos_val;
+                        break;
+                    }
+                }
+                // head
+                for (size_t i = 0; i < info_.head_joint_idx.size(); ++i) {
+                    if (info_.joint_infos[info_.head_joint_idx[i]].name == joint_name) {
+                        stream_target_[23 + i] = pos_val;
+                        break;
+                    }
+                }
+            }
+        }
+
+        last_update_time_ = this->now();
+
+        // 4. Find max minimum_time
+        double wait_time = 0.0;
+        if (!goal->torso.ref_link.empty()) wait_time = std::max(wait_time, goal->torso.minimum_time);
+        if (!goal->right_arm.ref_link.empty()) wait_time = std::max(wait_time, goal->right_arm.minimum_time);
+        if (!goal->left_arm.ref_link.empty()) wait_time = std::max(wait_time, goal->left_arm.minimum_time);
+
+        if (wait_time <= 0.0) wait_time = 0.1;
+
+        // 5. Wait loop while checking cancel
+        rclcpp::Rate wait_rate(100);
+        auto start_time = this->now();
+        bool is_canceled = false;
+        
+        while (rclcpp::ok()) {
+            if (goal_handle->is_canceling()) {
+                is_canceled = true;
+                break;
+            }
+            if ((this->now() - start_time).seconds() > wait_time) {
+                break;
+            }
+            wait_rate.sleep();
+        }
+
+        // 6. Handle cancel or success
+        if (is_canceled) {
+            RCLCPP_WARN(this->get_logger(), "stream_cartesian_command canceled. Holding current pose.");
+            try {
+                auto current_state = robot_->GetState();
+                std::lock_guard<std::mutex> target_lock(stream_target_mutex_);
+                for (size_t i = 0; i < info_.torso_joint_idx.size(); ++i) {
+                    stream_target_[3 + i] = current_state.position[info_.torso_joint_idx[i]];
+                }
+                for (size_t i = 0; i < info_.right_arm_joint_idx.size(); ++i) {
+                    stream_target_[9 + i] = current_state.position[info_.right_arm_joint_idx[i]];
+                }
+                for (size_t i = 0; i < info_.left_arm_joint_idx.size(); ++i) {
+                    stream_target_[16 + i] = current_state.position[info_.left_arm_joint_idx[i]];
+                }
+                for (size_t i = 0; i < info_.head_joint_idx.size(); ++i) {
+                    stream_target_[23 + i] = current_state.position[info_.head_joint_idx[i]];
+                }
+            } catch (const std::exception& e) {
+                RCLCPP_ERROR(this->get_logger(), "Failed to get state on stream action cancel: %s", e.what());
+            }
+            result->success = false;
+            result->finish_code = "kCanceled";
+            try { goal_handle->canceled(result); } catch (...) {}
+            return;
+        }
+
+        result->success = true;
+        result->finish_code = "kOk";
+        try { goal_handle->succeed(result); } catch (...) {}
     }
 
     // Explicit template instantiations

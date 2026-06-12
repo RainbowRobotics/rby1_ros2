@@ -127,7 +127,7 @@ class MobileBaseControl(Node):
         msg.angular.z = float(wz)
         self.cmd_vel_pub.publish(msg)
 
-    def send_goal(self, torso_pos, right_pos, left_pos, head_pos, minimum_time):
+    def send_pose_goal(self, torso_pos, right_pos, left_pos, head_pos, minimum_time):
         goal_msg = Rby1JointCommand.Goal()
         
         if torso_pos is not None:
@@ -153,8 +153,22 @@ class MobileBaseControl(Node):
         goal_msg.priority = 1
 
         self._action_client.wait_for_server()
-        self.get_logger().info('Sending Zero Pose Goal...')
-        return self._action_client.send_goal_async(goal_msg)
+        self.get_logger().info('Sending Prepare Posture Goal...')
+        future = self._action_client.send_goal_async(goal_msg)
+        rclpy.spin_until_future_complete(self, future)
+        goal_handle = future.result()
+
+        if goal_handle.accepted:
+            res_future = goal_handle.get_result_async()
+            rclpy.spin_until_future_complete(self, res_future)
+            result = res_future.result().result
+            if result.success:
+                self.get_logger().info('Prepare Posture Pose reached successfully.')
+                return True
+            else:
+                self.get_logger().error(f'Prepare Posture Pose failed with code: {result.finish_code}')
+                return False
+        return False
 
 def main(args=None):
     rclpy.init(args=args)
@@ -170,28 +184,27 @@ def main(args=None):
         rclpy.shutdown()
         return
 
-    # 1. Activate Stream Control
+    # 1. Send Prepare Posture Goal (Wait for completion while stream is inactive)
+    controller.get_logger().info('Sending prepare posture goal (minimum_time = 15.0s)...')
+    torso_pos = [0.0] * 6
+    right_pos = [0.0, -0.5, 0.0, -1.57, 0.0, 0.0, 0.0]
+    left_pos = [0.0, 0.5, 0.0, -1.57, 0.0, 0.0, 0.0]
+    head_pos = [0.2, 0.4]
+    
+    if not controller.send_pose_goal(torso_pos, right_pos, left_pos, head_pos, 15.0):
+        controller.get_logger().error('Failed to reach prepare posture. Exiting.')
+        controller.destroy_node()
+        rclpy.shutdown()
+        return
+
+    # 2. Activate Stream Control (Now safe because single command is done)
     if not controller.activate_stream_control(True):
         controller.get_logger().error('Failed to activate stream control. Exiting.')
         controller.destroy_node()
         rclpy.shutdown()
         return
     time.sleep(1.0)
-
-    # 2. Send Prepare Posture Goal (Wait for acceptance only)
-    controller.get_logger().info('Sending prepare posture goal (minimum_time = 10.0s)...')
-    torso_pos = [0.0] * 6
-    right_pos = [0.0, -0.5, 0.0, -1.57, 0.0, 0.0, 0.0]
-    left_pos = [0.0, 0.5, 0.0, -1.57, 0.0, 0.0, 0.0]
-    head_pos = [0.2, 0.4]
-    
-    future = controller.send_goal(torso_pos, right_pos, left_pos, head_pos, 15.0)
-    rclpy.spin_until_future_complete(controller, future)
-    goal_handle = future.result()
-    if not goal_handle.accepted:
-        controller.get_logger().error('Prepare posture goal rejected.')
-    else:
-        controller.get_logger().info('Prepare posture goal accepted. Immediately starting mobile base control...')
+    controller.get_logger().info('Stream activated. Starting mobile base control...')
 
     try:
         # Phase 1: Drive Forward

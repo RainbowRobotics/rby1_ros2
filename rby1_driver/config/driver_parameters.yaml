@@ -16,6 +16,8 @@
     # drive parameters
     get_state_period: 0.01 # 0.01 # seconds
     minimum_time: 2.0 # seconds
+    stream_hz: 15.0
+
     angular_velocity_limit: 4.712388 # 3.141592 * 1.5
     linear_velocity_limit: 1.5
     acceleration_limit: 1.0
