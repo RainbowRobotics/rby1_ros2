@@ -391,6 +391,13 @@ namespace rby1_ros2{
             }
 
             RCLCPP_INFO(this->get_logger(), "Power OFF [%s]...", power_list_str.c_str());
+            {
+                std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+                if (stream_handler_) {
+                    stream_handler_.reset();
+                }
+                stream_active_ = false;
+            }
             if (!robot_->PowerOff(power_list_str)) {
                 response->success = false;
                 response->message = "Failed to power off";
@@ -488,6 +495,13 @@ namespace rby1_ros2{
         } else {
             RCLCPP_INFO(this->get_logger(), "Servo OFF [%s]...", servo_list_str.c_str());
             robot_->DisableControlManager();
+            {
+                std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+                if (stream_handler_) {
+                    stream_handler_.reset();
+                }
+                stream_active_ = false;
+            }
             if (!robot_->ServoOff(servo_list_str)) {
                 RCLCPP_ERROR(this->get_logger(), "SDK ServoOff failed for [%s]", servo_list_str.c_str());
                 response->success = false;
@@ -739,9 +753,9 @@ namespace rby1_ros2{
                         if (stream_handler_) {
                             stream_handler_.reset();
                         }
+                        stream_active_ = false;
                     }
                     is_control_canceled_ = true;
-                    stream_active_ = false;
 
                     if (collision_recovery_enable_) {
                         if (is_recovering_) {
@@ -980,9 +994,13 @@ namespace rby1_ros2{
         RCLCPP_INFO(this->get_logger(), "Cancel Control service called");
         is_control_canceled_ = true;
         robot_->CancelControl();
-        if (stream_handler_) {
-            stream_handler_->Cancel();
-            stream_handler_.reset();
+        {
+            std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+            if (stream_handler_) {
+                stream_handler_->Cancel();
+                stream_handler_.reset();
+            }
+            stream_active_ = false;
         }
         response->success = true;
         response->message = "Control cancelled";
@@ -1018,6 +1036,18 @@ namespace rby1_ros2{
         const std::shared_ptr<rclcpp_action::ServerGoalHandle<FollowJointTrajectory>> goal_handle) {
         using namespace std::placeholders;
         RCLCPP_INFO(this->get_logger(), "FollowJointTrajectory Goal accepted. Detaching execution thread...");
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (active_follow_joint_trajectory_goal_ && active_follow_joint_trajectory_goal_->is_active()) {
+                auto result = std::make_shared<FollowJointTrajectory::Result>();
+                result->error_code = FollowJointTrajectory::Result::INVALID_GOAL;
+                result->error_string = "Preempted by new goal";
+                try { active_follow_joint_trajectory_goal_->abort(result); } catch (...) {}
+            }
+            active_follow_joint_trajectory_goal_ = goal_handle;
+        }
+
         std::thread{std::bind(&RBY1_ROS2_DRIVER<ModelType>::execute_follow_joint_trajectory, this, _1), goal_handle}.detach();
     }
 
@@ -1173,12 +1203,36 @@ namespace rby1_ros2{
         try {
             for (size_t i = 0; i < trajectory.points.size(); ++i) {
                 const auto& point = trajectory.points[i];
+                bool is_preempted = false;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (goal_handle != active_follow_joint_trajectory_goal_) {
+                        is_preempted = true;
+                    }
+                }
+
+                if (is_preempted) {
+                    RCLCPP_WARN(this->get_logger(), "FollowJointTrajectory execution preempted.");
+                    if (stream_was_inactive) {
+                        std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+                        if (stream_handler_) stream_handler_.reset();
+                        stream_active_ = false;
+                        RCLCPP_INFO(this->get_logger(), "Auto-deactivated persistent stream control on preemption.");
+                    }
+                    return;
+                }
+
                 if (goal_handle->is_canceling() || is_control_canceled_ || !rclcpp::ok()) {
                     RCLCPP_WARN(this->get_logger(), "FollowJointTrajectory execution canceled.");
                     result->error_code = FollowJointTrajectory::Result::INVALID_GOAL;
                     result->error_string = "Canceled";
                     try { goal_handle->canceled(result); } catch (...) {}
-                    
+                    {
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        if (active_follow_joint_trajectory_goal_ == goal_handle) {
+                            active_follow_joint_trajectory_goal_ = nullptr;
+                        }
+                    }
                     if (stream_was_inactive) {
                         std::lock_guard<std::mutex> stream_lock(stream_mutex_);
                         if (stream_handler_) stream_handler_.reset();
@@ -1332,9 +1386,35 @@ namespace rby1_ros2{
                 double total_timeout = total_duration + 2.0;
 
                 while (rclcpp::ok()) {
+                    bool is_preempted = false;
+                    {
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        if (goal_handle != active_follow_joint_trajectory_goal_) {
+                            is_preempted = true;
+                        }
+                    }
+                    if (is_preempted) {
+                        RCLCPP_WARN(this->get_logger(), "Trajectory wait loop preempted.");
+                        return;
+                    }
                     if (goal_handle->is_canceling() || is_control_canceled_) {
-                        RCLCPP_WARN(this->get_logger(), "Trajectory wait loop broken due to cancellation.");
-                        break;
+                        RCLCPP_WARN(this->get_logger(), "Trajectory wait loop canceled.");
+                        result->error_code = FollowJointTrajectory::Result::INVALID_GOAL;
+                        result->error_string = "Canceled";
+                        try { goal_handle->canceled(result); } catch (...) {}
+                        {
+                            std::lock_guard<std::mutex> lock(mutex_);
+                            if (active_follow_joint_trajectory_goal_ == goal_handle) {
+                                active_follow_joint_trajectory_goal_ = nullptr;
+                            }
+                        }
+                        if (stream_was_inactive) {
+                            std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+                            if (stream_handler_) stream_handler_.reset();
+                            stream_active_ = false;
+                            RCLCPP_INFO(this->get_logger(), "Auto-deactivated persistent stream control on cancel.");
+                        }
+                        return;
                     }
                     if ((this->now() - start_time).seconds() > total_timeout) {
                         break;
@@ -1347,6 +1427,14 @@ namespace rby1_ros2{
                     wait_rate.sleep();
                 }
             }
+
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (active_follow_joint_trajectory_goal_ == goal_handle) {
+                    active_follow_joint_trajectory_goal_ = nullptr;
+                }
+            }
+
             if (wait_success) {
                 RCLCPP_INFO(this->get_logger(), "FollowJointTrajectory execution completed successfully.");
                 result->error_code = FollowJointTrajectory::Result::SUCCESSFUL;
@@ -1383,6 +1471,15 @@ namespace rby1_ros2{
         RCLCPP_INFO(this->get_logger(), "Received Rby1JointCommand request");
         (void)uuid;
         (void)goal; // We will do validation in execute
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (active_follow_joint_trajectory_goal_ && active_follow_joint_trajectory_goal_->is_active()) {
+                RCLCPP_WARN(this->get_logger(), "Rejecting Rby1JointCommand: FollowJointTrajectory is currently executing.");
+                return rclcpp_action::GoalResponse::REJECT;
+            }
+        }
+
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
     }
 
@@ -1546,6 +1643,14 @@ namespace rby1_ros2{
             auto process_part = [&](const rby1_msgs::msg::JointCommand& cmd, const std::string& part_name, size_t expected_dof, std::string& err_msg) -> bool {
                 if (cmd.position.empty()) return true; // Ignore empty parts
 
+                double hold_time = cmd.control_hold_time;
+                {
+                    std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+                    if (stream_active_) {
+                        hold_time = 1e6;
+                    }
+                }
+
                 Eigen::VectorXd q = Eigen::Map<const Eigen::VectorXd>(cmd.position.data(), cmd.position.size());
                 Eigen::VectorXd clamped_vel_limits(cmd.position.size());
                 Eigen::VectorXd clamped_accel_limits(cmd.position.size());
@@ -1672,7 +1777,7 @@ namespace rby1_ros2{
                         use_head = true;
                     } else {
                         auto b = rb::JointImpedanceControlCommandBuilder();
-                        b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(cmd.control_hold_time));
+                        b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(hold_time));
                         b.SetPosition(q);
                         b.SetMinimumTime(cmd.minimum_time);
 
@@ -1701,7 +1806,7 @@ namespace rby1_ros2{
                     }
                 } else {
                     auto b = rb::JointPositionCommandBuilder();
-                    b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(cmd.control_hold_time));
+                    b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(hold_time));
                     b.SetPosition(q);
                     b.SetMinimumTime(cmd.minimum_time);
 
@@ -1764,7 +1869,23 @@ namespace rby1_ros2{
                 component_cmd_builder.SetBodyCommand(rb::BodyCommandBuilder(body_comp));
             }
 
+            bool has_stream = false;
+            {
+                std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+                if (stream_active_ && stream_handler_) {
+                    has_stream = true;
+                    stream_handler_->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder));
+                }
+            }
 
+            if (has_stream) {
+                RCLCPP_INFO(this->get_logger(), "Sent Rby1JointCommand via persistent stream_handler_.");
+                result->success = true;
+                result->finish_code = "kOk";
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                try { goal_handle->succeed(result); } catch (...) {}
+                return;
+            }
 
             auto cmd_handler = robot_->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder), goal->priority);
             
@@ -1827,6 +1948,15 @@ namespace rby1_ros2{
         RCLCPP_INFO(this->get_logger(), "Received Rby1CartesianCommand request");
         (void)uuid;
         (void)goal;
+
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (active_follow_joint_trajectory_goal_ && active_follow_joint_trajectory_goal_->is_active()) {
+                RCLCPP_WARN(this->get_logger(), "Rejecting Rby1CartesianCommand: FollowJointTrajectory is currently executing.");
+                return rclcpp_action::GoalResponse::REJECT;
+            }
+        }
+
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
     }
 
@@ -1984,6 +2114,14 @@ namespace rby1_ros2{
             auto process_part = [&](const rby1_msgs::msg::CartesianCommand& cmd, const std::string& part_name, std::string& err_msg) -> bool {
                 if (cmd.ref_link.empty() && cmd.target_link.empty()) return true; // Ignore empty parts
 
+                double hold_time = cmd.control_hold_time;
+                {
+                    std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+                    if (stream_active_) {
+                        hold_time = 1e6;
+                    }
+                }
+
                 if (cmd.ref_link.empty() || cmd.target_link.empty()) {
                     err_msg = "Invalid CartesianCommand: Both ref_link and target_link must be provided for " + part_name;
                     RCLCPP_ERROR(this->get_logger(), "%s", err_msg.c_str());
@@ -2014,7 +2152,7 @@ namespace rby1_ros2{
 
                 if (cmd.use_impedance) {
                     auto b = rb::ImpedanceControlCommandBuilder();
-                    b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(cmd.control_hold_time));
+                    b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(hold_time));
                     b.SetReferenceLinkName(cmd.ref_link);
                     b.SetLinkName(cmd.target_link);
                     b.SetTranslationWeight(*t_weight);
@@ -2033,7 +2171,7 @@ namespace rby1_ros2{
                     return true;
                 } else {
                     auto b = rb::CartesianCommandBuilder();
-                    b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(cmd.control_hold_time));
+                    b.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(hold_time));
                     b.SetMinimumTime(cmd.minimum_time);
 
                     double lin_vel = (cmd.linear_velocity_limit <= 0.0) ? robot_parameter_.linear_velocity_limit : cmd.linear_velocity_limit;
@@ -2106,7 +2244,23 @@ namespace rby1_ros2{
 
             component_cmd_builder.SetBodyCommand(rb::BodyCommandBuilder(body_comp));
 
+            bool has_stream = false;
+            {
+                std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+                if (stream_active_ && stream_handler_) {
+                    has_stream = true;
+                    stream_handler_->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder));
+                }
+            }
 
+            if (has_stream) {
+                RCLCPP_INFO(this->get_logger(), "Sent Rby1CartesianCommand via persistent stream_handler_.");
+                result->success = true;
+                result->finish_code = "kOk";
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                try { goal_handle->succeed(result); } catch (...) {}
+                return;
+            }
 
             auto cmd_handler = robot_->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder), goal->priority);
             
@@ -2263,6 +2417,13 @@ namespace rby1_ros2{
             } else if (request->command == rby1_msgs::srv::ControlManagerCommand::Request::CMD_DISABLE) {
                 RCLCPP_INFO(this->get_logger(), "Received Control Manager DISABLE request");
                 if (robot_->DisableControlManager()) {
+                    {
+                        std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+                        if (stream_handler_) {
+                            stream_handler_.reset();
+                        }
+                        stream_active_ = false;
+                    }
                     response->success = true;
                     response->message = "Control Manager disabled successfully.";
                 } else {
@@ -2272,6 +2433,13 @@ namespace rby1_ros2{
             } else if (request->command == rby1_msgs::srv::ControlManagerCommand::Request::CMD_RESET) {
                 RCLCPP_INFO(this->get_logger(), "Received Control Manager RESET request");
                 if (robot_->ResetFaultControlManager()) {
+                    {
+                        std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+                        if (stream_handler_) {
+                            stream_handler_.reset();
+                        }
+                        stream_active_ = false;
+                    }
                     response->success = true;
                     response->message = "Control Manager reset successfully.";
                 } else {

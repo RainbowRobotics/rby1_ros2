@@ -237,6 +237,26 @@ ros2 launch rby1_description rby1_state_publisher.launch.py model:=a version:=1_
   
   따라서 `collision_threshold`를 더 줄인 상태에서 구동을 한 후 자세를 안전하게 이동시켜 사용하기를 바란다.
 
+### Issue: Client-Side Warnings `Ignoring unexpected goal/result response` (예제/클라이언트 노드에서 경고 로그 출력 현상)
+
+* **Symptom (증상)**:
+  When running sequential Python examples (e.g., `13_stream_command`), the terminal outputs warnings like `Ignoring unexpected goal response. There may be more than one action server for the action 'robot_joint'` or `Ignoring unexpected result response`.
+  This occurs because:
+  1. Persistent streaming makes the action server return success immediately. If the client completes the goal before the Python client-side state machine processes the goal acceptance, a race condition occurs.
+  2. Standard blocking calls like `time.sleep()` prevent the ROS 2 executor thread from spinning, causing DDS status updates to accumulate and get processed out of order during the next goal spin.
+  
+  파이썬 예제나 클라이언트 노드를 순차적으로 실행할 때 `Ignoring unexpected goal response` 또는 `Ignoring unexpected result response` 경고 로그가 발생하는 현상입니다.
+  이는 다음과 같은 원인으로 발생합니다:
+  1. 지속성 스트림 사용 시 드라이버가 명령을 즉시 수락하고 성공을 반환하는데, 클라이언트단에서 이 성공 결과를 액션 수락 메시지 처리 완료 전에 먼저 받으면 경주 상황(Race Condition)이 발생합니다.
+  2. 일반적인 블로킹 함수인 `time.sleep()` 등을 사용하면 ROS 2 익스큐터가 회전(spin)하지 못해 DDS 메시지 큐가 처리되지 않고 누적되다가 다음 명령 시점에 강제 처리되면서 순서가 어긋납니다.
+
+* **Resolution (해결 방법)**:
+  1. The C++ driver has been updated to introduce a 50ms delay (`std::this_thread::sleep_for(std::chrono::milliseconds(50))`) before completing streaming commands to ensure the client-side state machine is ready.
+  2. In your sequential Python nodes, avoid using standard `time.sleep()`. Instead, implement a non-blocking spin-sleep function (e.g., `rclpy.spin_once` in a loop) to keep draining the DDS network queue:
+  
+  1. C++ 드라이버 단에서 스트림 명령 처리에 성공했을 때 약 50ms의 지연(`sleep_for`)을 추가하여 클라이언트가 수락 상태 전이를 마칠 시간을 확보하도록 수정되었습니다.
+  2. 순차 스크립트를 작성할 때는 `time.sleep()` 대신 루프 내에서 `rclpy.spin_once(node, timeout_sec=...)`를 호출하는 비블로킹 `spin_sleep` 형태의 대기 루프를 구현하여 사용하십시오.
+
 > [!NOTE]
 > **Simulator Limitation**: Battery voltage, FT sensor, and IMU data read as `0.0` in simulation (no physical hardware).
 > **Tool flange topics**: Requires `publish_tool_flange_state: true` in `driver_parameters.yaml`.
@@ -373,6 +393,16 @@ The `RobotState.control_manager_state` field (and the `robot_state` topic) uses 
 > - Attempting to activate `/stream_control` when already active is idempotent; the service will safely log a warning and return success.
 > - ⚠️ **Calling `cancel_control` while using stream-based control will also close the stream.** After `cancel_control`, you must re-open the stream before sending further `cmd_vel` commands. To cancel only the current motion without closing the stream, use the action cancel (see Example 13).
 > - The current stream open/close state is reflected in the `robot_state` topic as `robot_stream_state` (`bool`).
+>
+> [!WARNING]
+> **Behavior of `robot_joint` and `robot_cartesian` Actions under Active Stream:**
+> When persistent streaming is active (`stream_control` is `true`), the single joint (`robot_joint`) and Cartesian (`robot_cartesian`) commands are also routed through the command stream (`stream_handler_`).
+> - In this mode, these actions will return a success (`succeed`) status **immediately** after sending the command, without waiting for the robot to reach the target position or providing intermediate feedback.
+> - Therefore, target completion checking must be done independently by monitoring the joint state topics.
+>
+> **Joint/Cartesian Action Behavior Characteristics When Persistence Stream is Enabled:**
+> - When `robot_joint` and `robot_cartesian` action commands are sent while the persistence stream is turned on, those commands are transmitted through the stream channel.
+> - In this case, it **returns immediately** without waiting for the robot to reach the target position; therefore, the client side must monitor whether the target has been reached via a separate joint status topic.
 >
 > ⚙️ = controlled by the corresponding flag in `driver_parameters.yaml`
 

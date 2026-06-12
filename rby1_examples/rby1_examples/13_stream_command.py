@@ -66,6 +66,14 @@ class StreamCommand(Node):
                 return False
         return False
 
+    def spin_sleep(self, duration: float):
+        start_time = self.get_clock().now()
+        while rclpy.ok():
+            elapsed = (self.get_clock().now() - start_time).nanoseconds / 1e9
+            if elapsed >= duration:
+                break
+            rclpy.spin_once(self, timeout_sec=0.01)
+
     def ensure_robot_ready(self):
         self.get_logger().info('Ensuring robot is powered on and servos are active...')
         rclpy.spin_once(self, timeout_sec=0.5)
@@ -85,7 +93,7 @@ class StreamCommand(Node):
             self.get_logger().error(f'Failed to power on: {future.result().message}')
             return False
         
-        time.sleep(2.0)
+        self.spin_sleep(2.0)
             
         self.get_logger().info('Sending Servo ON request...')
         self.servo_client.wait_for_service()
@@ -97,7 +105,7 @@ class StreamCommand(Node):
             
         if self.wait_for_state([2, 3], timeout=15.0):
             self.get_logger().info('Robot is ready.')
-            time.sleep(1.0)
+            self.spin_sleep(1.0)
             return True
         else:
             self.get_logger().error(f'Timed out waiting for robot to enable.')
@@ -198,7 +206,7 @@ def main(args=None):
                 node.get_logger().error('Failed to move to Zero Pose.')
                 break
             node.get_logger().info(f'Zero Pose reached. Waiting for interval {interval}s...')
-            time.sleep(interval)
+            node.spin_sleep(interval)
 
             # Move to Ready Pose
             node.get_logger().info('Moving to Ready Pose...')
@@ -206,7 +214,7 @@ def main(args=None):
                 node.get_logger().error('Failed to move to Ready Pose.')
                 break
             node.get_logger().info(f'Ready Pose reached. Waiting for interval {interval}s...')
-            time.sleep(interval)
+            node.spin_sleep(interval)
 
         node.get_logger().info('\nAll motion loops completed successfully.')
         node.get_logger().info('Stream is kept ACTIVE as requested.')

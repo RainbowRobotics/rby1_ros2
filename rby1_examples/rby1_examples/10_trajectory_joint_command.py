@@ -59,6 +59,14 @@ class TrajectoryJointCommand(Node):
                 return False
         return False
 
+    def spin_sleep(self, duration: float):
+        start_time = self.get_clock().now()
+        while rclpy.ok():
+            elapsed = (self.get_clock().now() - start_time).nanoseconds / 1e9
+            if elapsed >= duration:
+                break
+            rclpy.spin_once(self, timeout_sec=0.01)
+
     def ensure_robot_ready(self):
         self.get_logger().info('Ensuring robot is powered on and servos are active...')
 
@@ -80,7 +88,7 @@ class TrajectoryJointCommand(Node):
             self.get_logger().error(f'Failed to power on: {future.result().message}')
             return False
 
-        time.sleep(1.0)  # Wait for power to stabilize
+        self.spin_sleep(1.0)  # Wait for power to stabilize
 
         # 3. Servo On
         self.get_logger().info('Sending Servo ON request...')
@@ -94,7 +102,7 @@ class TrajectoryJointCommand(Node):
         # 4. Wait for state to become 2 or 3
         if self.wait_for_state([2, 3], timeout=10.0):
             self.get_logger().info('Robot is ready.')
-            time.sleep(1.0)
+            self.spin_sleep(1.0)
             return True
         else:
             self.get_logger().error(f'Timed out waiting for robot to enable. Current state: {self.control_state}')
@@ -224,7 +232,7 @@ def run_trajectory_phase(action_client, label, trajectory):
         action_client.get_logger().error(f'[{label}] Failed to enable stream. Skipping phase.')
         return False
 
-    time.sleep(0.5)
+    action_client.spin_sleep(0.5)
 
     action_client.get_logger().info(f'[{label}] Sending trajectory...')
     future = action_client.send_stream_goal(trajectory)
@@ -238,11 +246,11 @@ def run_trajectory_phase(action_client, label, trajectory):
         action_client.get_logger().info(
             f'[{label}] Done: error_code={result.error_code}, msg="{result.error_string}"')
 
-    time.sleep(2.0)
+    action_client.spin_sleep(2.0)
 
     action_client.get_logger().info(f'[{label}] Disabling stream...')
     action_client.toggle_stream(False)
-    time.sleep(0.5)
+    action_client.spin_sleep(0.5)
     return True
 
 
@@ -285,7 +293,7 @@ def main(args=None):
 
     action_client.get_logger().info('[Phase 1] Returning to Zero Pose...')
     action_client.go_to_zero_pose()
-    time.sleep(1.5)
+    action_client.spin_sleep(1.5)
 
     # =========================================================
     # Phase 2: Impedance Control  (Impedance ON → Target → Zero)
@@ -313,6 +321,83 @@ def main(args=None):
         action_client.set_impedance(False)
         action_client.get_logger().info('[Phase 2] Returning to Zero Pose...')
         action_client.go_to_zero_pose()
+
+    # =========================================================
+    # Phase 3: Trajectory Preemption & Rejection Test
+    # =========================================================
+    action_client.get_logger().info('=' * 50)
+    action_client.get_logger().info('Phase 3: Trajectory Preemption & Rejection Test')
+    action_client.get_logger().info('=' * 50)
+
+    action_client.get_logger().info('[Phase 3] Enabling persistent stream...')
+    if not action_client.toggle_stream(True):
+        action_client.get_logger().error('[Phase 3] Failed to enable stream. Skipping phase.')
+    else:
+        # Build Trajectory 1 (Slow motion, 8 seconds duration)
+        traj_slow = build_trajectory(joint_names, full_start, full_target, num_points=20, total_sec=8.0)
+        
+        action_client.get_logger().info('[Phase 3] Sending Trajectory 1 (Slow Zero -> Target, 8s)...')
+        future1 = action_client.send_stream_goal(traj_slow)
+        rclpy.spin_until_future_complete(action_client, future1)
+        goal_handle1 = future1.result()
+        
+        if not goal_handle1.accepted:
+            action_client.get_logger().error('[Phase 3] Trajectory 1 was rejected.')
+        else:
+            # Sleep a bit
+            action_client.spin_sleep(1.0)
+            
+            # TEST: Try sending a single joint command while the trajectory is running.
+            # This should be REJECTED by the driver action server.
+            action_client.get_logger().info('[Phase 3] TEST: Sending Rby1JointCommand during active trajectory (expecting REJECT)...')
+            test_goal = Rby1JointCommand.Goal()
+            test_goal.torso = JointCommand()
+            test_goal.torso.position = [0.0] * 6
+            test_goal.torso.minimum_time = 2.0
+            
+            action_client._zero_pose_client.wait_for_server()
+            test_future = action_client._zero_pose_client.send_goal_async(test_goal)
+            rclpy.spin_until_future_complete(action_client, test_future)
+            test_goal_handle = test_future.result()
+            
+            if not test_goal_handle.accepted:
+                action_client.get_logger().info('[Phase 3] SUCCESS: Rby1JointCommand was successfully REJECTED by the driver!')
+            else:
+                action_client.get_logger().error('[Phase 3] FAILURE: Rby1JointCommand was accepted when trajectory was running.')
+            
+            # Sleep the remaining time for the 2s interval
+            action_client.spin_sleep(1.0)
+            
+            # Send Trajectory 2 to preempt it (moves back to zero in 3s)
+            est_midpoint = [(s + (t - s) * 0.25) for s, t in zip(full_start, full_target)]
+            traj_preempt = build_trajectory(joint_names, est_midpoint, full_start, num_points=10, total_sec=3.0)
+            
+            action_client.get_logger().info('[Phase 3] Sending Trajectory 2 (Preempting Trajectory 1, moving back to Zero)...')
+            future2 = action_client.send_stream_goal(traj_preempt)
+            rclpy.spin_until_future_complete(action_client, future2)
+            goal_handle2 = future2.result()
+            
+            if not goal_handle2.accepted:
+                action_client.get_logger().error('[Phase 3] Trajectory 2 was rejected.')
+            else:
+                # Wait for both results
+                res_future1 = goal_handle1.get_result_async()
+                rclpy.spin_until_future_complete(action_client, res_future1)
+                result1 = res_future1.result().result
+                action_client.get_logger().info(
+                    f'[Phase 3] Trajectory 1 finished: error_code={result1.error_code}, error_string="{result1.error_string}"')
+                
+                res_future2 = goal_handle2.get_result_async()
+                rclpy.spin_until_future_complete(action_client, res_future2)
+                result2 = res_future2.result().result
+                action_client.get_logger().info(
+                    f'[Phase 3] Trajectory 2 finished: error_code={result2.error_code}, error_string="{result2.error_string}"')
+                
+        # Clean up
+        action_client.spin_sleep(1.0)
+        action_client.get_logger().info('[Phase 3] Disabling stream...')
+        action_client.toggle_stream(False)
+        action_client.spin_sleep(0.5)
 
     action_client.get_logger().info('Example complete.')
     action_client.destroy_node()

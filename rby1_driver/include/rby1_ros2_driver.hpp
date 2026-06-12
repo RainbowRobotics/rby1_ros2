@@ -224,5 +224,6 @@ namespace rby1_ros2{
                                          std::shared_ptr<std_srvs::srv::Trigger::Response> response);
             
             std::unique_ptr<rb::RobotCommandStreamHandler<ModelType>> stream_handler_;
+            std::shared_ptr<rclcpp_action::ServerGoalHandle<FollowJointTrajectory>> active_follow_joint_trajectory_goal_{nullptr};
     };
 } 
