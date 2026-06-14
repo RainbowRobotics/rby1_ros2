@@ -107,11 +107,12 @@ class MobileBaseControl(Node):
             self.get_logger().error(f'Timed out waiting for robot to enable. Current state: {self.control_state}')
             return False
 
-    def activate_stream_control(self, state=True):
-        self.get_logger().info(f'Setting stream control to {state}...')
+    def activate_stream_control(self, state=True, value=0.0):
+        self.get_logger().info(f'Setting stream control to {state} with value {value}...')
         self.stream_client.wait_for_service()
         req = StateOnOff.Request()
         req.state = state
+        req.value = value
         future = self.stream_client.call_async(req)
         rclpy.spin_until_future_complete(self, future)
         if future.result() is None or not future.result().success:

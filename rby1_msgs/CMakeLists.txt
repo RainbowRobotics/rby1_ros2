@@ -25,11 +25,15 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/Rby1JointCommand.action"
   "action/Rby1CartesianCommand.action"
   "action/StreamPosition.action"
+  "action/StreamJoint.action"
+  "action/StreamCartesian.action"
   "msg/BrakeState.msg"
   "msg/RobotState.msg"
   "msg/ToolFlangeState.msg"
   "msg/JointCommand.msg"
   "msg/CartesianCommand.msg"
+  "msg/StreamJointCommand.msg"
+  "msg/StreamCartesianCommand.msg"
   DEPENDENCIES action_msgs trajectory_msgs geometry_msgs
 )
 

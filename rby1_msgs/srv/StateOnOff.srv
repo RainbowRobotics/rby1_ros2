@@ -4,6 +4,9 @@ bool state
 
 # Optional parameter string mapping target components or configs
 string parameters
+
+# Optional numerical value (e.g. stream frequency)
+float64 value
 ---
 # Service Response definition
 # True if state transition executed successfully, False otherwise

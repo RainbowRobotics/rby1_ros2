@@ -75,11 +75,12 @@ class MultiControlsExample(Node):
         rclpy.spin_until_future_complete(self, future)
         return future.result()
 
-    def toggle_stream(self, enable: bool) -> bool:
+    def toggle_stream(self, enable: bool, value: float = 0.0) -> bool:
         req = StateOnOff.Request()
         req.state = enable
         req.parameters = ""
-        self.get_logger().info(f"Calling stream_control: state={enable}...")
+        req.value = value
+        self.get_logger().info(f"Calling stream_control: state={enable}, value={value}...")
         self.stream_control_client.wait_for_service()
         future = self.stream_control_client.call_async(req)
         rclpy.spin_until_future_complete(self, future)

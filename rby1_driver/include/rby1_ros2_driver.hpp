@@ -25,6 +25,8 @@
 #include "rby1_msgs/srv/set_trajectory_impedance.hpp"
 #include "rby1_msgs/action/rby1_joint_command.hpp"
 #include "rby1_msgs/action/rby1_cartesian_command.hpp"
+#include "rby1_msgs/action/stream_joint.hpp"
+#include "rby1_msgs/action/stream_cartesian.hpp"
 #include "std_msgs/msg/int32.hpp"
 //sdk
 #include "rby1-sdk/robot.h"
@@ -108,6 +110,7 @@ namespace rby1_ros2{
 
             bool robot_initialize_flag{false};
             bool stream_active_{false};
+            bool received_stream_command_{false};
             bool collision_enable_{true};
             bool collision_recovery_enable_{false};
             bool Pre_collision_detection_{false};
@@ -126,12 +129,14 @@ namespace rby1_ros2{
             using Rby1JointCommand = rby1_msgs::action::Rby1JointCommand;
             using Rby1CartesianCommand = rby1_msgs::action::Rby1CartesianCommand;
             using FollowJointTrajectory = control_msgs::action::FollowJointTrajectory;
+            using StreamJoint = rby1_msgs::action::StreamJoint;
+            using StreamCartesian = rby1_msgs::action::StreamCartesian;
             
             rclcpp_action::Server<Rby1JointCommand>::SharedPtr rby1_joint_command_action_server_;
             rclcpp_action::Server<Rby1CartesianCommand>::SharedPtr rby1_cartesian_command_action_server_;
             rclcpp_action::Server<FollowJointTrajectory>::SharedPtr follow_joint_trajectory_action_server_;
-            rclcpp_action::Server<Rby1JointCommand>::SharedPtr stream_joint_command_action_server_;
-            rclcpp_action::Server<Rby1CartesianCommand>::SharedPtr stream_cartesian_command_action_server_;
+            rclcpp_action::Server<StreamJoint>::SharedPtr stream_joint_action_server_;
+            rclcpp_action::Server<StreamCartesian>::SharedPtr stream_cartesian_action_server_;
             
             rclcpp::Service<rby1_msgs::srv::StateOnOff>::SharedPtr power_service_;
             rclcpp::Service<rby1_msgs::srv::StateOnOff>::SharedPtr servo_service_;
@@ -146,10 +151,15 @@ namespace rby1_ros2{
             rclcpp::Service<rby1_msgs::srv::SetTrajectoryImpedance>::SharedPtr set_trajectory_impedance_service_;
 
             // Impedance state for follow_joint_trajectory
-            bool   trajectory_impedance_enabled_{false};
-            std::vector<double> trajectory_stiffness_;    // full joint order: torso+right+left+head
+            bool   trajectory_impedance_enabled_torso_{false};
+            bool   trajectory_impedance_enabled_right_arm_{false};
+            bool   trajectory_impedance_enabled_left_arm_{false};
+            std::vector<double> trajectory_stiffness_torso_;
+            std::vector<double> trajectory_stiffness_right_arm_;
+            std::vector<double> trajectory_stiffness_left_arm_;
             double trajectory_damping_ratio_{1.0};
             double trajectory_torque_limit_{10.0};
+            double stream_hz_{15.0};
 
             void gravity_compensation_callback(const std::shared_ptr<rby1_msgs::srv::GravityCompensation::Request> request,
                                                std::shared_ptr<rby1_msgs::srv::GravityCompensation::Response> response);
@@ -223,23 +233,22 @@ namespace rby1_ros2{
             void handle_rby1_cartesian_accepted(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1CartesianCommand>> goal_handle);
             void execute_rby1_cartesian_command(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1CartesianCommand>> goal_handle);
 
-            // Stream Joint Command Action Handlers
+            // Stream Command Actions Handlers
             rclcpp_action::GoalResponse handle_stream_joint_goal(
                 const rclcpp_action::GoalUUID& uuid,
-                std::shared_ptr<const Rby1JointCommand::Goal> goal);
+                std::shared_ptr<const StreamJoint::Goal> goal);
             rclcpp_action::CancelResponse handle_stream_joint_cancel(
-                const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1JointCommand>> goal_handle);
-            void handle_stream_joint_accepted(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1JointCommand>> goal_handle);
-            void execute_stream_joint_command(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1JointCommand>> goal_handle);
+                const std::shared_ptr<rclcpp_action::ServerGoalHandle<StreamJoint>> goal_handle);
+            void handle_stream_joint_accepted(const std::shared_ptr<rclcpp_action::ServerGoalHandle<StreamJoint>> goal_handle);
+            void execute_stream_joint(const std::shared_ptr<rclcpp_action::ServerGoalHandle<StreamJoint>> goal_handle);
 
-            // Stream Cartesian Command Action Handlers
             rclcpp_action::GoalResponse handle_stream_cartesian_goal(
                 const rclcpp_action::GoalUUID& uuid,
-                std::shared_ptr<const Rby1CartesianCommand::Goal> goal);
+                std::shared_ptr<const StreamCartesian::Goal> goal);
             rclcpp_action::CancelResponse handle_stream_cartesian_cancel(
-                const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1CartesianCommand>> goal_handle);
-            void handle_stream_cartesian_accepted(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1CartesianCommand>> goal_handle);
-            void execute_stream_cartesian_command(const std::shared_ptr<rclcpp_action::ServerGoalHandle<Rby1CartesianCommand>> goal_handle);
+                const std::shared_ptr<rclcpp_action::ServerGoalHandle<StreamCartesian>> goal_handle);
+            void handle_stream_cartesian_accepted(const std::shared_ptr<rclcpp_action::ServerGoalHandle<StreamCartesian>> goal_handle);
+            void execute_stream_cartesian(const std::shared_ptr<rclcpp_action::ServerGoalHandle<StreamCartesian>> goal_handle);
 
             void cancel_control_callback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
                                          std::shared_ptr<std_srvs::srv::Trigger::Response> response);
@@ -252,5 +261,29 @@ namespace rby1_ros2{
             std::thread stream_thread_;
             void stream_loop();
             rclcpp::Time last_update_time_;
+            
+            rclcpp::Time last_stream_time_torso_{0, 0, RCL_ROS_TIME};
+            rclcpp::Time last_stream_time_right_arm_{0, 0, RCL_ROS_TIME};
+            rclcpp::Time last_stream_time_left_arm_{0, 0, RCL_ROS_TIME};
+            rclcpp::Time last_stream_time_head_{0, 0, RCL_ROS_TIME};
+            rclcpp::Time last_stream_time_mobility_{0, 0, RCL_ROS_TIME};
+            bool stream_mode_whole_body_{false};
+
+            bool process_joint_part(const rby1_msgs::msg::JointCommand& cmd,
+                                    const std::string& part_name,
+                                    size_t expected_dof,
+                                    rb::BodyComponentBasedCommandBuilder& body_comp,
+                                    rb::ComponentBasedCommandBuilder& component_cmd_builder,
+                                    bool& use_body,
+                                    bool& use_head,
+                                    std::string& err_msg);
+
+            bool process_cartesian_part(const rby1_msgs::msg::CartesianCommand& cmd,
+                                         const std::string& part_name,
+                                         double stop_position_tracking_error,
+                                         double stop_orientation_tracking_error,
+                                         rb::BodyComponentBasedCommandBuilder& body_comp,
+                                         bool& use_body,
+                                         std::string& err_msg);
     };
 } 

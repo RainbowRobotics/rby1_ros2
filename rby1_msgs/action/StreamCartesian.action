@@ -1,0 +1,7 @@
+# Action Goal definition
+rby1_msgs/StreamCartesianCommand command
+---
+# Action Result definition
+bool success
+---
+# Action Feedback definition

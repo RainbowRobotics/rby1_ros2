@@ -36,6 +36,7 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 class TrajectoryJointCommand(Node):
     def __init__(self):
         super().__init__('trajectory_joint_command')
+        self.stream_hz =  15.0
         self._stream_client = ActionClient(self, FollowJointTrajectory, 'follow_joint_trajectory')
         self._zero_pose_client = ActionClient(self, Rby1JointCommand, 'robot_joint')
         self.power_client = self.create_client(StateOnOff, 'robot_power')
@@ -108,14 +109,15 @@ class TrajectoryJointCommand(Node):
             self.get_logger().error(f'Timed out waiting for robot to enable. Current state: {self.control_state}')
             return False
 
-    def toggle_stream(self, enable: bool) -> bool:
+    def toggle_stream(self, enable: bool, value: float = 0.0) -> bool:
         if not rclpy.ok():
             return False
         try:
             req = StateOnOff.Request()
             req.state = enable
             req.parameters = ""
-            self.get_logger().info(f"Calling stream_control: state={enable}...")
+            req.value = value
+            self.get_logger().info(f"Calling stream_control: state={enable}, value={value}...")
             self.stream_control_client.wait_for_service(timeout_sec=1.0)
             future = self.stream_control_client.call_async(req)
             rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
@@ -132,28 +134,35 @@ class TrajectoryJointCommand(Node):
             self.get_logger().error(f"Exception during stream control toggle: {e}")
         return False
 
-    def set_impedance(self, enable: bool,
-                      stiffness: list = None,
+    def set_impedance(self, enable_states: list,
+                      torso_stiffness: list = None,
+                      right_arm_stiffness: list = None,
+                      left_arm_stiffness: list = None,
                       damping_ratio: float = 1.0,
                       torque_limit: float = 10.0) -> bool:
-        """Enable or disable impedance mode for follow_joint_trajectory.
+        """Enable or disable impedance mode for follow_joint_trajectory per part.
 
         Args:
-            enable: True to activate impedance control, False to revert to position control.
-            stiffness: Joint stiffness list [N·m/rad], ordered torso(6)+right_arm(7)+left_arm(7)+head(2)=22.
-                       Leave None or empty list to use the default value of 100.0 for all joints.
+            enable_states: List of booleans for [torso, right_arm, left_arm] to activate impedance control.
+            torso_stiffness: Joint stiffness list for Torso.
+            right_arm_stiffness: Joint stiffness list for Right Arm.
+            left_arm_stiffness: Joint stiffness list for Left Arm.
             damping_ratio: Dimensionless damping ratio (default 1.0).
             torque_limit: Per-joint torque limit in N·m (default 10.0).
         """
         req = SetTrajectoryImpedance.Request()
-        req.state = enable
-        req.stiffness = stiffness if stiffness else []
-        req.damping_ratio = damping_ratio
-        req.torque_limit = torque_limit
+        req.state = enable_states
+        req.torso_stiffness = torso_stiffness if torso_stiffness else []
+        req.right_arm_stiffness = right_arm_stiffness if right_arm_stiffness else []
+        req.left_arm_stiffness = left_arm_stiffness if left_arm_stiffness else []
+        req.damping_ratio = [damping_ratio]
+        req.torque_limit = [torque_limit]
 
         self.get_logger().info(
-            f"Calling set_trajectory_impedance: state={enable}, "
-            f"stiffness={'default(100.0)' if not stiffness else f'{len(stiffness)} values'}, "
+            f"Calling set_trajectory_impedance: state={enable_states}, "
+            f"torso_stiffness={'default(100.0)' if not torso_stiffness else f'{len(torso_stiffness)} values'}, "
+            f"right_arm_stiffness={'default(100.0)' if not right_arm_stiffness else f'{len(right_arm_stiffness)} values'}, "
+            f"left_arm_stiffness={'default(100.0)' if not left_arm_stiffness else f'{len(left_arm_stiffness)} values'}, "
             f"damping_ratio={damping_ratio}, torque_limit={torque_limit}"
         )
         self.impedance_client.wait_for_service(timeout_sec=2.0)
@@ -228,7 +237,7 @@ def build_trajectory(joint_names, full_start, full_target, num_points=10, total_
 def run_trajectory_phase(action_client, label, trajectory):
     """Enable stream → send trajectory → wait for result → disable stream."""
     action_client.get_logger().info(f'[{label}] Enabling persistent stream...')
-    if not action_client.toggle_stream(True):
+    if not action_client.toggle_stream(True, value=action_client.stream_hz):
         action_client.get_logger().error(f'[{label}] Failed to enable stream. Skipping phase.')
         return False
 
@@ -257,6 +266,8 @@ def run_trajectory_phase(action_client, label, trajectory):
 def main(args=None):
     rclpy.init(args=args)
     action_client = TrajectoryJointCommand()
+    stream_hz = action_client.stream_hz
+    action_client.get_logger().info(f"Using stream_hz = {stream_hz} (trajectory waypoint density aligned to stream rate)")
 
     # --- Common trajectory setup ---
     joint_names = [f'torso_{i}' for i in range(6)] + \
@@ -288,7 +299,7 @@ def main(args=None):
         action_client.get_logger().error('Failed to establish zero pose.')
         return
 
-    traj_pos = build_trajectory(joint_names, full_start, full_target)
+    traj_pos = build_trajectory(joint_names, full_start, full_target, num_points=int(5.0 * stream_hz), total_sec=5.0)
     run_trajectory_phase(action_client, 'PositionCtrl', traj_pos)
 
     action_client.get_logger().info('[Phase 1] Returning to Zero Pose...')
@@ -302,23 +313,25 @@ def main(args=None):
     action_client.get_logger().info('Phase 2: Impedance Control (Impedance ON → Target → Zero)')
     action_client.get_logger().info('=' * 50)
 
-    # Stiffness order: torso(6) + right_arm(7) + left_arm(7) + head(2) = 22 joints total.
-    # Head is always position-controlled by the driver regardless of this value.
-    stiffness = (
-        [200.0] * 6 +  # torso: stiffer
-        [100.0] * 7 +  # right arm: compliant
-        [100.0] * 7 +  # left arm: compliant
-        [50.0]  * 2    # head: driver ignores, falls back to position ctrl
-    )
-    if not action_client.set_impedance(True, stiffness=stiffness, damping_ratio=1.0, torque_limit=10.0):
+    # Stiffness arrays per part
+    torso_stiffness = [200.0] * 6
+    right_arm_stiffness = [100.0] * 7
+    left_arm_stiffness = [100.0] * 7
+
+    if not action_client.set_impedance([False, True, True],
+                                      torso_stiffness=torso_stiffness,
+                                      right_arm_stiffness=right_arm_stiffness,
+                                      left_arm_stiffness=left_arm_stiffness,
+                                      damping_ratio=1.0,
+                                      torque_limit=10.0):
         action_client.get_logger().error('[Phase 2] Failed to enable impedance mode. Skipping.')
     else:
-        traj_imp = build_trajectory(joint_names, full_start, full_target)
+        traj_imp = build_trajectory(joint_names, full_start, full_target, num_points=int(5.0 * stream_hz), total_sec=5.0)
         run_trajectory_phase(action_client, 'ImpedanceCtrl', traj_imp)
 
         # Disable impedance before returning to zero (zero uses robot_joint, not follow_joint_trajectory,
         # but disabling here keeps the state clean)
-        action_client.set_impedance(False)
+        action_client.set_impedance([False, False, False])
         action_client.get_logger().info('[Phase 2] Returning to Zero Pose...')
         action_client.go_to_zero_pose()
 
@@ -330,11 +343,11 @@ def main(args=None):
     action_client.get_logger().info('=' * 50)
 
     action_client.get_logger().info('[Phase 3] Enabling persistent stream...')
-    if not action_client.toggle_stream(True):
+    if not action_client.toggle_stream(True, value=stream_hz):
         action_client.get_logger().error('[Phase 3] Failed to enable stream. Skipping phase.')
     else:
         # Build Trajectory 1 (Slow motion, 8 seconds duration)
-        traj_slow = build_trajectory(joint_names, full_start, full_target, num_points=20, total_sec=8.0)
+        traj_slow = build_trajectory(joint_names, full_start, full_target, num_points=int(8.0 * stream_hz), total_sec=8.0)
         
         action_client.get_logger().info('[Phase 3] Sending Trajectory 1 (Slow Zero -> Target, 8s)...')
         future1 = action_client.send_stream_goal(traj_slow)
@@ -370,7 +383,7 @@ def main(args=None):
             
             # Send Trajectory 2 to preempt it (moves back to zero in 3s)
             est_midpoint = [(s + (t - s) * 0.25) for s, t in zip(full_start, full_target)]
-            traj_preempt = build_trajectory(joint_names, est_midpoint, full_start, num_points=10, total_sec=3.0)
+            traj_preempt = build_trajectory(joint_names, est_midpoint, full_start, num_points=int(3.0 * stream_hz), total_sec=3.0)
             
             action_client.get_logger().info('[Phase 3] Sending Trajectory 2 (Preempting Trajectory 1, moving back to Zero)...')
             future2 = action_client.send_stream_goal(traj_preempt)
