@@ -75,11 +75,12 @@ class MultiControlsExample(Node):
         rclpy.spin_until_future_complete(self, future)
         return future.result()
 
-    def toggle_stream(self, enable: bool) -> bool:
+    def toggle_stream(self, enable: bool, value: float = 0.0) -> bool:
         req = StateOnOff.Request()
         req.state = enable
         req.parameters = ""
-        self.get_logger().info(f"Calling stream_control: state={enable}...")
+        req.value = value
+        self.get_logger().info(f"Calling stream_control: state={enable}, value={value}...")
         self.stream_control_client.wait_for_service()
         future = self.stream_control_client.call_async(req)
         rclpy.spin_until_future_complete(self, future)
@@ -180,14 +181,14 @@ def main(args=None):
     min_time = 5.0
 
     # 1. Prepare Joint Goal (Torso: Joint Position, Left Arm: Joint Position)
-    torso_pos = [0.0] * 6
-    left_arm_pos = [0.0, 0.5, 0.0, -1.0, 0.0, 0.0, 0.0]
+    torso_pos = [0.0,0.2,-0.4,0.2,0.0,0.0]
+    left_arm_pos = [0.0, 0.5, 0.0, -1.5, 0.0, 0.0, 0.0]
 
     # 2. Prepare Cartesian Goal (Right Arm: Cartesian position)
     right_transform = Transform()
     right_transform.translation.x = 0.3
     right_transform.translation.y = -0.3
-    right_transform.translation.z = -0.0
+    right_transform.translation.z = -0.2
     right_transform.rotation.x = 0.0
     right_transform.rotation.y = 0.0
     right_transform.rotation.z = 0.0

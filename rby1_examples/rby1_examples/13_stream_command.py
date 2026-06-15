@@ -1,57 +1,36 @@
 #!/usr/bin/env python3
 """
-Stream Command Example
-======================
-Demonstrates persistent command stream longevity and responsiveness by enabling
-persistent stream mode and then sending standard joint command goals (Rby1JointCommand)
-sequentially with varying wait intervals (0.5s to 3s).
+Stream Command Example (Normal Stream Mode)
+===========================================
+Demonstrates normal stream mode behavior. Updates arms joint positions,
+queries and moves end-effector Cartesian poses, demonstrates goal preemption,
+and safe return to Zero Pose.
 
-Because persistent stream control is enabled, the driver's command stream hold time
-is kept active (up to 10 minutes), allowing regular motion commands to be received
-safely even after significant delay between inputs.
-
-Scenario:
-  1. Ensure the robot is powered and enabled.
-  2. Call '/stream_control' service to enable a persistent stream.
-  3. Loop through varying wait intervals (0.5s, 1s, 1.5s, 2s, 2.5s, 3s):
-     - Send standard JointCommand to Zero Pose.
-     - Wait for completion.
-     - Wait for the loop's interval.
-     - Send standard JointCommand to Ready Pose.
-     - Wait for completion.
-     - Wait for the loop's interval.
-  4. Keep the stream active after the loop completes.
-  5. Upon node shutdown (e.g. Ctrl+C), safely deactivate the stream.
+Run:
+  ros2 run rby1_examples 13_stream_command
 """
 import time
+import copy
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
-from rby1_msgs.action import Rby1JointCommand
-from rby1_msgs.msg import JointCommand, RobotState
-from rby1_msgs.srv import StateOnOff
+from rby1_msgs.action import Rby1CartesianCommand, Rby1JointCommand
+from rby1_msgs.msg import JointCommand, RobotState, CartesianCommand
+from rby1_msgs.srv import StateOnOff, GetCartesianPose
 
 class StreamCommand(Node):
     def __init__(self):
         super().__init__('stream_command')
-        self._action_client = ActionClient(self, Rby1JointCommand, 'robot_joint')
+        self.stream_hz = 15.0
+        self.joint_client = ActionClient(self, Rby1JointCommand, 'robot_joint')
+        self.cartesian_client = ActionClient(self, Rby1CartesianCommand, 'robot_cartesian')
         self.power_client = self.create_client(StateOnOff, 'robot_power')
         self.servo_client = self.create_client(StateOnOff, 'robot_servo')
         self.stream_control_client = self.create_client(StateOnOff, 'stream_control')
+        self.get_pose_client = self.create_client(GetCartesianPose, 'get_cartesian_pose')
         
         self.state_sub = self.create_subscription(RobotState, 'robot_state', self.state_callback, 10)
         self.control_state = None
-
-        # Build joint ready pose values
-        self.zero_torso = [0.0] * 6
-        self.zero_right = [0.0] * 7
-        self.zero_left  = [0.0] * 7
-        self.zero_head  = [0.0] * 2
-
-        self.ready_torso = [0.0] * 6
-        self.ready_right = [0.0, -0.5, 0.0, -1.0, 0.0, 0.0, 0.0]
-        self.ready_left  = [0.0, 0.5, 0.0, -1.0, 0.0, 0.0, 0.0]
-        self.ready_head  = [0.0, 0.0]
 
     def state_callback(self, msg):
         self.control_state = msg.control_manager_state
@@ -65,6 +44,14 @@ class StreamCommand(Node):
             if (self.get_clock().now() - start_time).nanoseconds / 1e9 > timeout:
                 return False
         return False
+
+    def spin_sleep(self, duration: float):
+        start_time = self.get_clock().now()
+        while rclpy.ok():
+            elapsed = (self.get_clock().now() - start_time).nanoseconds / 1e9
+            if elapsed >= duration:
+                break
+            rclpy.spin_once(self, timeout_sec=0.01)
 
     def ensure_robot_ready(self):
         self.get_logger().info('Ensuring robot is powered on and servos are active...')
@@ -85,7 +72,7 @@ class StreamCommand(Node):
             self.get_logger().error(f'Failed to power on: {future.result().message}')
             return False
         
-        time.sleep(2.0)
+        self.spin_sleep(2.0)
             
         self.get_logger().info('Sending Servo ON request...')
         self.servo_client.wait_for_service()
@@ -97,20 +84,51 @@ class StreamCommand(Node):
             
         if self.wait_for_state([2, 3], timeout=15.0):
             self.get_logger().info('Robot is ready.')
-            time.sleep(1.0)
+            self.spin_sleep(1.0)
             return True
         else:
             self.get_logger().error(f'Timed out waiting for robot to enable.')
             return False
 
-    def toggle_stream(self, enable: bool) -> bool:
+    def go_to_zero_pose(self):
+        self.get_logger().info('Moving Whole Body to Zero Pose...')
+        goal_msg = Rby1JointCommand.Goal()
+
+        for part in ['torso', 'right_arm', 'left_arm', 'head']:
+            cmd = JointCommand()
+            if part == 'torso':
+                cmd.position = [0.0] * 6
+            elif part == 'head':
+                cmd.position = [0.0] * 2
+            elif part in ['right_arm', 'left_arm']:
+                cmd.position = [0.0] * 7
+            cmd.minimum_time = 3.0
+            setattr(goal_msg, part, cmd)
+
+        self.joint_client.wait_for_server()
+        future = self.joint_client.send_goal_async(goal_msg)
+        rclpy.spin_until_future_complete(self, future)
+        goal_handle = future.result()
+
+        if goal_handle.accepted:
+            res_future = goal_handle.get_result_async()
+            rclpy.spin_until_future_complete(self, res_future)
+            result = res_future.result().result
+            if result.success:
+                self.get_logger().info('Zero Pose reached successfully.')
+                return True
+            else:
+                self.get_logger().error(f'Zero Pose failed with code: {result.finish_code}')
+        return False
+
+    def toggle_stream(self, enable: bool, mode: str = "normal") -> bool:
         if not rclpy.ok():
             return False
         try:
             req = StateOnOff.Request()
             req.state = enable
-            req.parameters = ""
-            self.get_logger().info(f"Calling stream_control: state={enable}...")
+            req.parameters = mode
+            self.get_logger().info(f"Calling stream_control: state={enable}, mode={mode}...")
             self.stream_control_client.wait_for_service(timeout_sec=1.0)
             future = self.stream_control_client.call_async(req)
             rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
@@ -127,47 +145,14 @@ class StreamCommand(Node):
             print(f"Exception during stream control toggle: {e}")
         return False
 
-    def send_joint_goal(self, torso, right_arm, left_arm, head, minimum_time=3.0) -> bool:
-        self._action_client.wait_for_server()
-        
-        goal_msg = Rby1JointCommand.Goal()
-        
-        if torso is not None:
-            goal_msg.torso = JointCommand()
-            goal_msg.torso.position = torso
-            goal_msg.torso.minimum_time = minimum_time
-            
-        if right_arm is not None:
-            goal_msg.right_arm = JointCommand()
-            goal_msg.right_arm.position = right_arm
-            goal_msg.right_arm.minimum_time = minimum_time
-            
-        if left_arm is not None:
-            goal_msg.left_arm = JointCommand()
-            goal_msg.left_arm.position = left_arm
-            goal_msg.left_arm.minimum_time = minimum_time
-            
-        if head is not None:
-            goal_msg.head = JointCommand()
-            goal_msg.head.position = head
-            goal_msg.head.minimum_time = minimum_time
-
-        goal_msg.priority = 10
-        
-        self.get_logger().info('Sending joint command goal...')
-        future = self._action_client.send_goal_async(goal_msg)
+    def get_cartesian_pose(self, ref_link, target_link):
+        req = GetCartesianPose.Request()
+        req.ref_link = ref_link
+        req.target_link = target_link
+        self.get_pose_client.wait_for_service()
+        future = self.get_pose_client.call_async(req)
         rclpy.spin_until_future_complete(self, future)
-        goal_handle = future.result()
-        
-        if not goal_handle.accepted:
-            self.get_logger().error('Joint command goal was rejected.')
-            return False
-            
-        self.get_logger().info('Goal accepted. Waiting for execution to complete...')
-        res_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, res_future)
-        result = res_future.result().result
-        return result.success
+        return future.result().transform
 
 def main(args=None):
     from rclpy.signals import SignalHandlerOptions
@@ -179,41 +164,152 @@ def main(args=None):
         node.get_logger().error('Failed to prepare robot. Exiting.')
         return
 
-    # 2. Enable Persistent Command Stream
-    if not node.toggle_stream(True):
+    # Go to zero pose first to make sure robot starts from [0.0]*22
+    if not node.go_to_zero_pose():
+        node.get_logger().error('Failed to establish zero pose.')
+        return
+
+    # 2. Enable Persistent Command Stream in normal mode
+    if not node.toggle_stream(True, mode="normal"):
         node.get_logger().error('Failed to enable command stream. Exiting.')
         return
 
-    intervals = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
     try:
-        # 3. Alternate between Zero Pose and Ready Pose using regular joint commands over persistent stream
-        for idx, interval in enumerate(intervals):
-            node.get_logger().info(f"\n==========================================")
-            node.get_logger().info(f" Starting Loop {idx+1}/{len(intervals)} (Interval: {interval}s)")
-            node.get_logger().info(f"==========================================")
-
-            # Move to Zero Pose
-            node.get_logger().info('Moving to Zero Pose...')
-            if not node.send_joint_goal(node.zero_torso, node.zero_right, node.zero_left, node.zero_head, minimum_time=3.0):
-                node.get_logger().error('Failed to move to Zero Pose.')
-                break
-            node.get_logger().info(f'Zero Pose reached. Waiting for interval {interval}s...')
-            time.sleep(interval)
-
-            # Move to Ready Pose
-            node.get_logger().info('Moving to Ready Pose...')
-            if not node.send_joint_goal(node.ready_torso, node.ready_right, node.ready_left, node.ready_head, minimum_time=3.0):
-                node.get_logger().error('Failed to move to Ready Pose.')
-                break
-            node.get_logger().info(f'Ready Pose reached. Waiting for interval {interval}s...')
-            time.sleep(interval)
-
-        node.get_logger().info('\nAll motion loops completed successfully.')
-        node.get_logger().info('Stream is kept ACTIVE as requested.')
-        node.get_logger().info('Press Ctrl+C to shut down node and deactivate stream control safely.')
+        # Step 1: Move both arms to Ready Pose using Joint control
+        node.get_logger().info('\n==========================================')
+        node.get_logger().info(' Step 1: Moving Arms to Ready Pose (Joint Command, 3.0s)')
+        node.get_logger().info('==========================================')
         
-        # Keep spinning to hold stream active
-        rclpy.spin(node)
+        goal_msg = Rby1JointCommand.Goal()
+        # Right Arm Ready
+        goal_msg.right_arm = JointCommand()
+        goal_msg.right_arm.position = [0.0, -0.5, 0.0, -1.0, 0.0, 0.0, 0.0]
+        goal_msg.right_arm.minimum_time = 3.0
+        # Left Arm Ready
+        goal_msg.left_arm = JointCommand()
+        goal_msg.left_arm.position = [0.0, 0.5, 0.0, -1.0, 0.0, 0.0, 0.0]
+        goal_msg.left_arm.minimum_time = 3.0
+        goal_msg.priority = 10
+        
+        node.get_logger().info('Sending Joint Goal...')
+        node.joint_client.wait_for_server()
+        future = node.joint_client.send_goal_async(goal_msg)
+        rclpy.spin_until_future_complete(node, future)
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            node.get_logger().error('Joint command rejected.')
+            return
+        
+        get_res_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(node, get_res_future)
+        node.get_logger().info('Ready Pose reached.')
+        node.spin_sleep(1.0)
+
+        # Step 2: Move Z-axis UP using Cartesian control (refer to example 8)
+        node.get_logger().info('\n==========================================')
+        node.get_logger().info(' Step 2: Moving Z-axis UP (Cartesian Command, 3.0s)')
+        node.get_logger().info('==========================================')
+        
+        # Query current Cartesian poses
+        ready_right_trans = node.get_cartesian_pose("link_torso_5", "link_right_arm_6")
+        ready_left_trans = node.get_cartesian_pose("link_torso_5", "link_left_arm_6")
+        node.get_logger().info(f"ready_right_trans: {ready_right_trans}")
+        node.get_logger().info(f"ready_left_trans: {ready_left_trans}")
+
+        # Define Z-up target (Z + 0.05m)
+        up_right_trans = copy.deepcopy(ready_right_trans)
+        up_right_trans.translation.z += 0.05
+        up_left_trans = copy.deepcopy(ready_left_trans)
+        up_left_trans.translation.z += 0.05
+
+        cart_goal_msg = Rby1CartesianCommand.Goal()
+        # Right Arm UP
+        cart_goal_msg.right_arm = CartesianCommand()
+        cart_goal_msg.right_arm.ref_link = "link_torso_5"
+        cart_goal_msg.right_arm.target_link = "link_right_arm_6"
+        cart_goal_msg.right_arm.transform = up_right_trans
+        cart_goal_msg.right_arm.minimum_time = 3.0
+        
+        # Left Arm UP
+        cart_goal_msg.left_arm = CartesianCommand()
+        cart_goal_msg.left_arm.ref_link = "link_torso_5"
+        cart_goal_msg.left_arm.target_link = "link_left_arm_6"
+        cart_goal_msg.left_arm.transform = up_left_trans
+        cart_goal_msg.left_arm.minimum_time = 3.0
+        
+        node.get_logger().info('Sending Cartesian Goal (UP)...')
+        node.cartesian_client.wait_for_server()
+        future = node.cartesian_client.send_goal_async(cart_goal_msg)
+        rclpy.spin_until_future_complete(node, future)
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            node.get_logger().error('Cartesian command (UP) rejected.')
+            return
+        
+        get_res_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(node, get_res_future)
+        node.get_logger().info('Cartesian UP complete.')
+        node.spin_sleep(1.0)
+
+        # Step 3: Move Z-axis BACK DOWN to Ready Pose, then preempt and return to Zero Pose
+        node.get_logger().info('\n==========================================')
+        node.get_logger().info(' Step 3: Moving Z-axis DOWN and Preempting to Zero Pose')
+        node.get_logger().info('==========================================')
+        
+        cart_goal_msg_down = Rby1CartesianCommand.Goal()
+        # Right Arm DOWN to ready_right_trans
+        cart_goal_msg_down.right_arm = CartesianCommand()
+        cart_goal_msg_down.right_arm.ref_link = "link_torso_5"
+        cart_goal_msg_down.right_arm.target_link = "link_right_arm_6"
+        cart_goal_msg_down.right_arm.transform = ready_right_trans
+        cart_goal_msg_down.right_arm.minimum_time = 5.0
+        
+        # Left Arm DOWN to ready_left_trans
+        cart_goal_msg_down.left_arm = CartesianCommand()
+        cart_goal_msg_down.left_arm.ref_link = "link_torso_5"
+        cart_goal_msg_down.left_arm.target_link = "link_left_arm_6"
+        cart_goal_msg_down.left_arm.transform = ready_left_trans
+        cart_goal_msg_down.left_arm.minimum_time = 5.0
+
+        node.get_logger().info('Sending Cartesian Goal (DOWN)...')
+        future = node.cartesian_client.send_goal_async(cart_goal_msg_down)
+        rclpy.spin_until_future_complete(node, future)
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            node.get_logger().error('Cartesian command (DOWN) rejected.')
+            return
+
+        # Let it move for 1.5 seconds, then preempt/cancel it
+        node.get_logger().info('Moving relative down... Preempting in 1.5 seconds...')
+        node.spin_sleep(1.5)
+        
+        node.get_logger().info('Preempting Cartesian Goal...')
+        cancel_future = goal_handle.cancel_goal_async()
+        rclpy.spin_until_future_complete(node, cancel_future)
+        node.get_logger().info('Cartesian Goal canceled.')
+        
+        node.spin_sleep(0.5)
+
+        # Move to Zero Pose via Joint control
+        node.get_logger().info('Sending Joint Goal to return to Zero Pose (3.0s)...')
+        zero_goal_msg = Rby1JointCommand.Goal()
+        zero_goal_msg.right_arm = JointCommand()
+        zero_goal_msg.right_arm.position = [0.0] * 7
+        zero_goal_msg.right_arm.minimum_time = 3.0
+        zero_goal_msg.left_arm = JointCommand()
+        zero_goal_msg.left_arm.position = [0.0] * 7
+        zero_goal_msg.left_arm.minimum_time = 3.0
+        
+        future = node.joint_client.send_goal_async(zero_goal_msg)
+        rclpy.spin_until_future_complete(node, future)
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            node.get_logger().error('Zero pose joint goal rejected.')
+            return
+        
+        get_res_future = goal_handle.get_result_async()
+        rclpy.spin_until_future_complete(node, get_res_future)
+        node.get_logger().info('Returned to Zero Pose successfully.')
 
     except KeyboardInterrupt:
         node.get_logger().info('KeyboardInterrupt received. Shutting down...')
@@ -227,4 +323,3 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
- 

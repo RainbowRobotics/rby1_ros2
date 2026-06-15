@@ -93,7 +93,7 @@ def main(args=None):
     # 5. Torso gravity compensation ON
     # 6. 5 seconds later, OFF
 
-    parts = ["right_arm", "left_arm"]
+    parts = ["right_arm", "left_arm"] # torso
 
     for part in parts:
         example.get_logger().info(f'==========================================')
