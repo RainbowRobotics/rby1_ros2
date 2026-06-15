@@ -186,14 +186,14 @@ def main(args=None):
         return
 
     # 1. Send Prepare Posture Goal (Wait for completion while stream is inactive)
-    controller.get_logger().info('Sending prepare posture goal (minimum_time = 15.0s)...')
+    controller.get_logger().info('Sending zero position (minimum_time = 5.0s)...')
     torso_pos = [0.0] * 6
-    right_pos = [0.0, -0.5, 0.0, -1.57, 0.0, 0.0, 0.0]
-    left_pos = [0.0, 0.5, 0.0, -1.57, 0.0, 0.0, 0.0]
-    head_pos = [0.2, 0.4]
+    right_pos = [0.0] * 7
+    left_pos = [0.0] * 7
+    head_pos = [0.0] * 2
     
-    if not controller.send_pose_goal(torso_pos, right_pos, left_pos, head_pos, 15.0):
-        controller.get_logger().error('Failed to reach prepare posture. Exiting.')
+    if not controller.send_pose_goal(torso_pos, right_pos, left_pos, head_pos, 5.0):
+        controller.get_logger().error('Failed to reach zero position. Exiting.')
         controller.destroy_node()
         rclpy.shutdown()
         return

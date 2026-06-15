@@ -145,19 +145,20 @@ ros2 run rby1_examples <example_name>
 | Example | Command | Description |
 |---------|---------|-------------|
 | `01_power_control` | `ros2 run rby1_examples 01_power_control` | Full power lifecycle: Power ON/OFF, Servo ON/OFF |
-| `02_robot_status_monitor` | `ros2 run rby1_examples 02_robot_status_monitor` | Comprehensive state monitor (CM state, brakes, battery, FT) |
+| `02_robot_status_monitor` | `ros2 run rby1_examples 02_robot_status_monitor` | Comprehensive state monitor (Motor state, brakes, battery, FT) |
 | `03_tool_flange_monitoring` | `ros2 run rby1_examples 03_tool_flange_monitoring` | Continuously prints tool flange FT/IMU/IO data |
 | `04_joint_state_monitoring` | `ros2 run rby1_examples 04_joint_state_monitoring` | Prints per-component joint positions in real time |
-| `05_gravity_compensation` | `ros2 run rby1_examples 05_gravity_compensation` | Enables gravity compensation (direct teaching) mode |
+| `05_gravity_compensation` | `ros2 run rby1_examples 05_gravity_compensation` | Enables/Disable gravity compensation (direct teaching) mode |
 | `06_zero_pose` | `ros2 run rby1_examples 06_zero_pose` | Moves all joints to 0 rad simultaneously |
 | `07_joint_command` | `ros2 run rby1_examples 07_joint_command` | Sends Ready Pose → Zero Pose via joint position action |
-| `08_cartesian_command` | `ros2 run rby1_examples 08_cartesian_command` | Moves the right arm to a target Cartesian pose |
+| `08_cartesian_command` | `ros2 run rby1_examples 08_cartesian_command` | Moves the arms to a target Cartesian pose |
 | `09_multi_controls` | `ros2 run rby1_examples 09_multi_controls` | Simultaneous joint + Cartesian control per body part |
 | `10_trajectory_joint_command` | `ros2 run rby1_examples 10_trajectory_joint_command` | Streams a pre-computed trajectory via standard FollowJointTrajectory action |
-| `11_cancel_control` | `ros2 run rby1_examples 11_cancel_control` | Demonstrates action cancel and Trigger service cancel |
-| `12_mobile_base_control` | `ros2 run rby1_examples 12_mobile_base_control` | Drives the mobile base via `cmd_vel` while simultaneously commanding upper-body joints — demonstrates mandatory stream activation and priority=1 simultaneous control |
+| `11_cancel_control` | `ros2 run rby1_examples 11_cancel_control` | Demonstrates action cancel and `cancel_control` service |
+| `12_mobile_base_control` | `ros2 run rby1_examples 12_mobile_base_control` | Drives the mobile base via `cmd_vel`|
 | `13_stream_command` | `ros2 run rby1_examples 13_stream_command` | Alternates Zero/Ready poses using regular joint commands over persistent stream with varying wait intervals |
-| `14_collision_safety_control` | `ros2 run rby1_examples 14_collision_safety_control` | Enables/disables the automatic retreat to initial safe pose on collision |
+| `14_whole_body_stream` | `ros2 run rby1_examples 14_whole_body_stream` | Commands all 5 body(mobile, torso, right_arm,left_arm, head) parts in stream with varying wait intervals |
+| `15_collision_safety_control` | `ros2 run rby1_examples 15_collision_safety_control` | use collision value in robot.state, Demonstrates that when collision happens, robot automatically moves retreat to initial safe pose.  |
 
 ---
 

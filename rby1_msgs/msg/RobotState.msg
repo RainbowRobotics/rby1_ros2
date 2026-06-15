@@ -23,4 +23,7 @@ float64[3] center_of_mass
 
 # robot stream state
 bool robot_stream_state
+
+# Collision status
+bool collision
  

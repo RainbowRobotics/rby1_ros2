@@ -99,7 +99,6 @@ namespace rby1_ros2{
             rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr left_arm_pub_;
             rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr head_pub_;
             rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;
-            //rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr wheel_pub_;
             rclcpp::Publisher<rby1_msgs::msg::RobotState>::SharedPtr robot_state_pub_;
             rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr battery_state_pub_;
             rclcpp::Publisher<rby1_msgs::msg::ToolFlangeState>::SharedPtr tool_flange_left_pub_;
@@ -112,16 +111,49 @@ namespace rby1_ros2{
             bool stream_active_{false};
             bool received_stream_command_{false};
             bool collision_enable_{true};
-            bool collision_recovery_enable_{false};
             bool Pre_collision_detection_{false};
-            std::atomic<bool> is_controlling_{false};
-            std::atomic<bool> is_recovering_{false};
-            bool has_initial_pose_{false};
-            std::vector<double> initial_joint_positions_;
-            void execute_collision_safety_retreat();
+
+            // ── Per-part control flags ──────────────────────────────────────────
+            // Indexed by PartIndex: MOBILE=0, TORSO=1, RIGHT_ARM=2, LEFT_ARM=3, HEAD=4
+            static constexpr size_t PART_MOBILE    = 0;
+            static constexpr size_t PART_TORSO     = 1;
+            static constexpr size_t PART_RIGHT_ARM = 2;
+            static constexpr size_t PART_LEFT_ARM  = 3;
+            static constexpr size_t PART_HEAD      = 4;
+            static constexpr size_t PART_COUNT     = 5;
+            std::atomic<bool> is_controlling_[PART_COUNT]{}; // true while that part is commanded
+            bool any_part_controlling() const;
+
+            // ── Whole-body stream convergence ──────────────────────────────────
+            // 0.05 degrees converted to radians
+            static constexpr double kWbConvergenceRad = 0.0008;
+            std::atomic<uint64_t> wb_command_seq_{0}; // incremented on each new WB/stream cmd
+            bool wait_for_wb_convergence(const std::vector<size_t>& parts,
+                                          uint64_t seq, double timeout_sec = 10.0);
+            void update_stream_target_for_joint_goal(
+                const typename rby1_msgs::action::Rby1JointCommand::Goal& goal);
+
+            std::atomic<bool> has_printed_collision_log_{false};
             int get_link_index(const std::string& name);
             std::optional<std::string> get_predicted_collision_reason(const Eigen::VectorXd& target_q);
             std::optional<Eigen::VectorXd> solve_cartesian_ik(const std::vector<typename rb::OptimalControl<ModelType::kRobotDOF>::LinkTarget>& link_targets);
+
+            // ── Builder helpers ────────────────────────────────────────────────
+            void make_joint_pos_builder(
+                rb::JointPositionCommandBuilder& builder,
+                const Eigen::VectorXd& q, double minimum_time, double hold_time,
+                double vel_limit = 0.0, double acc_limit = 0.0);
+            void make_joint_impedance_builder(
+                rb::JointImpedanceControlCommandBuilder& builder,
+                const Eigen::VectorXd& q, double minimum_time, double hold_time,
+                const Eigen::VectorXd& stiffness, double damping_ratio, double torque_limit,
+                double vel_limit = 0.0, double acc_limit = 0.0);
+            void build_mobility_cmd(
+                rb::MobilityCommandBuilder& builder,
+                double vx, double vy, double wz, double minimum_time);
+            void build_stream_joint_part(
+                const Eigen::VectorXd& q, double minimum_time, const std::string& part_name,
+                rb::BodyComponentBasedCommandBuilder& body_comp, rb::ComponentBasedCommandBuilder& comp);
 
             // Timer for 100Hz publishing
             rclcpp::TimerBase::SharedPtr joint_state_timer_;
@@ -145,8 +177,6 @@ namespace rby1_ros2{
             rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr cancel_control_service_;
             rclcpp::Service<rby1_msgs::srv::GetCartesianPose>::SharedPtr get_cartesian_pose_service_;
             rclcpp::Service<rby1_msgs::srv::ControlManagerCommand>::SharedPtr control_manager_service_;
-            // rclcpp::Service<rby1_msgs::srv::StateOnOff>::SharedPtr motor_brake_service_;
-            rclcpp::Service<rby1_msgs::srv::StateOnOff>::SharedPtr collision_safety_service_;
             rclcpp::Service<rby1_msgs::srv::StateOnOff>::SharedPtr stream_control_service_;
             rclcpp::Service<rby1_msgs::srv::SetTrajectoryImpedance>::SharedPtr set_trajectory_impedance_service_;
 
@@ -165,10 +195,6 @@ namespace rby1_ros2{
                                                std::shared_ptr<rby1_msgs::srv::GravityCompensation::Response> response);
             void control_manager_callback(const std::shared_ptr<rby1_msgs::srv::ControlManagerCommand::Request> request,
                                           std::shared_ptr<rby1_msgs::srv::ControlManagerCommand::Response> response);
-            // void motor_brake_callback(const std::shared_ptr<rby1_msgs::srv::StateOnOff::Request> request,
-            //                           std::shared_ptr<rby1_msgs::srv::StateOnOff::Response> response);
-            void collision_safety_callback(const std::shared_ptr<rby1_msgs::srv::StateOnOff::Request> request,
-                                           std::shared_ptr<rby1_msgs::srv::StateOnOff::Response> response);
             void stream_control_callback(const std::shared_ptr<rby1_msgs::srv::StateOnOff::Request> request,
                                          std::shared_ptr<rby1_msgs::srv::StateOnOff::Response> response);
             void set_trajectory_impedance_callback(
@@ -185,7 +211,6 @@ namespace rby1_ros2{
             bool check_controll_manager();
             void read_joint_state();
             std::string finish_code_to_string(rb::RobotCommandFeedback::FinishCode code);
-            
 
             void joint_state_callback(const sensor_msgs::msg::JointState::SharedPtr msg);
             std::vector<std::string> dyn_link_names_;
@@ -203,8 +228,6 @@ namespace rby1_ros2{
                                 std::shared_ptr<rby1_msgs::srv::StateOnOff::Response> response);
             void get_cartesian_pose_callback(const std::shared_ptr<rby1_msgs::srv::GetCartesianPose::Request> request,
                                              std::shared_ptr<rby1_msgs::srv::GetCartesianPose::Response> response);
-
-
 
             // Follow Joint Trajectory Action Handlers
             rclcpp_action::GoalResponse handle_follow_joint_trajectory_goal(const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const FollowJointTrajectory::Goal> goal);

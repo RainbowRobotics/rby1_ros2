@@ -17,6 +17,7 @@ namespace rby1_ros2{
         bool is_servo_on = false;
         bool is_ready = false;
         ControlState state = IDLE;
+        bool collision = false;
     };
 
     struct RobotJoint{

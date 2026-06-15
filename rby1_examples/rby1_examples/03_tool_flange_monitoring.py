@@ -19,8 +19,8 @@ import sys
 import time
 import rclpy
 from rclpy.node import Node
-from rby1_msgs.msg import ToolFlangeState
-from rby1_msgs.srv import StateOnOff
+from rby1_msgs.msg import ToolFlangeState, RobotState
+from rby1_msgs.srv import StateOnOff, ControlManagerCommand
 
 class ToolFlangeMonitoring(Node):
     def __init__(self):
@@ -30,9 +30,18 @@ class ToolFlangeMonitoring(Node):
         # State caches
         self.tf_left_msg = None
         self.tf_right_msg = None
+        self.control_state = None
+        self.tool_flange_connected = [False, False]
+
+        # Service client for control manager
+        self.control_manager_client = self.create_client(ControlManagerCommand, 'control_manager_command')
 
         # Service client for power control
         self.tool_flange_client = self.create_client(StateOnOff, 'tool_flange_power')
+
+        # Subscribe to robot_state to check if enabled
+        self.state_sub = self.create_subscription(
+            RobotState, 'robot_state', self.state_callback, 10)
 
         # Subscribe to separate left and right tool flange topics (flat namespace)
         self.left_sub = self.create_subscription(
@@ -41,18 +50,34 @@ class ToolFlangeMonitoring(Node):
             ToolFlangeState, 'tool_flange/right', lambda msg: self.tf_callback(msg, 'Right'), 10)
 
         # Verify tool flange topics are active
-        if not self.verify_topic_active('tool_flange/left', timeout=1.5):
+        if not self.verify_topic_active('tool_flange/left', timeout=5.0):
             self.get_logger().error(
                 "Error: Topic 'tool_flange/left' is not active!\n"
                 "Please make sure the RBY1 ROS 2 driver is running and 'publish_tool_flange_state: true' is set in driver_parameters.yaml."
             )
             sys.exit(1)
 
+        # Wait for first robot state message to get the control state
+        self.get_logger().info('Waiting for robot state...')
+        start_time = time.time()
+        while rclpy.ok() and self.control_state is None:
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if time.time() - start_time > 5.0:
+                self.get_logger().error("Timed out waiting for robot_state topic!")
+                sys.exit(1)
+
+        # If robot is enabled or executing, disable it first
+        if self.control_state in [RobotState.STATE_ENABLE, RobotState.STATE_EXECUTING]:
+            self.get_logger().info(f"Robot is in state {self.control_state}. Disabling robot before turning on tool flange power...")
+            if not self.disable_robot():
+                self.get_logger().error("Failed to disable robot. Exiting.")
+                sys.exit(1)
+
         # Call service to turn on 12V tool flange power
         self.send_tool_flange_request(True, '12')
 
         # Timer for 10 Hz dynamic console updates
-        self.timer = self.create_timer(0.1, self.render_dashboard)
+        self.timer = self.create_timer(1, self.render_dashboard)
 
     def verify_topic_active(self, topic_name, timeout=1.5):
         start_time = time.time()
@@ -94,6 +119,43 @@ class ToolFlangeMonitoring(Node):
             self.get_logger().error(f"tool_flange_power {op} FAILED: {result.message}")
         return result.success
 
+    def disable_robot(self) -> bool:
+        if not self.control_manager_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Service 'control_manager_command' not available after 5 seconds.")
+            return False
+
+        req = ControlManagerCommand.Request()
+        req.command = ControlManagerCommand.Request.CMD_DISABLE
+
+        self.get_logger().info("Calling control_manager to disable robot...")
+        future = self.control_manager_client.call_async(req)
+        rclpy.spin_until_future_complete(self, future)
+
+        result = future.result()
+        if result is None:
+            self.get_logger().error("No response from control_manager service.")
+            return False
+
+        if result.success:
+            self.get_logger().info("Robot successfully disabled.")
+            # Wait for state to change to IDLE
+            start_time = time.time()
+            while rclpy.ok():
+                rclpy.spin_once(self, timeout_sec=0.1)
+                if self.control_state == RobotState.STATE_IDLE:
+                    break
+                if time.time() - start_time > 5.0:
+                    self.get_logger().warn("Timed out waiting for state to transition to IDLE.")
+                    break
+            return True
+        else:
+            self.get_logger().error(f"Failed to disable robot: {result.message}")
+            return False
+
+    def state_callback(self, msg):
+        self.control_state = msg.control_manager_state
+        self.tool_flange_connected = msg.tool_flange_state
+
     def tf_callback(self, msg, side):
         if side == 'Left':
             self.tf_left_msg = msg
@@ -107,15 +169,27 @@ class ToolFlangeMonitoring(Node):
         print("                 RBY1 TOOL FLANGE REAL-TIME MONITOR              ")
         print("=" * 65)
         
+        # Check if simulation/disconnected
+        left_conn = self.tool_flange_connected[0] if len(self.tool_flange_connected) > 0 else False
+        right_conn = self.tool_flange_connected[1] if len(self.tool_flange_connected) > 1 else False
+        
+        if not left_conn and not right_conn:
+            print("\033[1;33m[NOTE] Simulation Mode or Hardware Disconnected detected.\033[0m")
+            print("Tool flange data and output voltages will read as 0.0.")
+            print("-" * 65)
+
         # Display each side's data side-by-side or beautifully stacked
-        for side, tf in [("Left", self.tf_left_msg), ("Right", self.tf_right_msg)]:
+        for side, tf, conn in [("Left", self.tf_left_msg, left_conn), ("Right", self.tf_right_msg, right_conn)]:
             if tf:
                 voltage_v = tf.output_voltage / 1000.0  # mV -> V
                 voltage_str = f"{voltage_v:.2f} V"
                 if tf.output_voltage > 1000:
                     power_status = "\033[1;32mON (12V)\033[0m"
                 else:
-                    power_status = "\033[1;31mOFF\033[0m"
+                    if not conn:
+                        power_status = "\033[1;33mOFF / SIMULATED\033[0m"
+                    else:
+                        power_status = "\033[1;31mOFF\033[0m"
                 
                 print(f"Tool Flange [{side}]: Power Status = {power_status} ({voltage_str})")
                 
