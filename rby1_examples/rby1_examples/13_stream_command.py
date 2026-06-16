@@ -35,6 +35,9 @@ class StreamCommand(Node):
         
         self.state_sub = self.create_subscription(RobotState, 'robot_state', self.state_callback, 10)
         self.control_state = None
+        self.robot_stream_state = None
+        self.mb_running = False
+        self.mb_thread = None
 
         # Build joint ready/zero pose values
         self.zero_torso = [0.0] * 6
@@ -49,6 +52,51 @@ class StreamCommand(Node):
 
     def state_callback(self, msg):
         self.control_state = msg.control_manager_state
+        self.robot_stream_state = msg.robot_stream_state
+
+    def start_mobile_base_thread(self):
+        import threading
+        self.mb_running = True
+        self.mb_thread = threading.Thread(target=self.mobile_base_loop)
+        self.mb_thread.daemon = True
+        self.mb_thread.start()
+        self.get_logger().info("Mobile base background thread started.")
+
+    def stop_mobile_base_thread(self):
+        self.mb_running = False
+        if self.mb_thread is not None:
+            self.mb_thread.join(timeout=1.0)
+            self.mb_thread = None
+        # Publish final stop command
+        stop_twist = Twist()
+        self.cmd_vel_pub.publish(stop_twist)
+        self.get_logger().info("Mobile base background thread stopped.")
+
+    def mobile_base_loop(self):
+        # Move back and forth in 5-second cycles:
+        # 0.0 - 1.5s: Forward (0.15 m/s)
+        # 1.5 - 2.5s: Stop (0.0 m/s)
+        # 2.5 - 4.0s: Backward (-0.15 m/s)
+        # 4.0 - 5.0s: Stop (0.0 m/s)
+        hz = 10.0
+        dt = 1.0 / hz
+        start_time = self.get_clock().now()
+        while rclpy.ok() and self.mb_running:
+            elapsed = (self.get_clock().now() - start_time).nanoseconds / 1e9
+            relative_t = elapsed % 5.0
+            
+            twist_msg = Twist()
+            if relative_t < 1.5:
+                twist_msg.linear.x = 0.15
+            elif 1.5 <= relative_t < 2.5:
+                twist_msg.linear.x = 0.0
+            elif 2.5 <= relative_t < 4.0:
+                twist_msg.linear.x = -0.15
+            else:
+                twist_msg.linear.x = 0.0
+                
+            self.cmd_vel_pub.publish(twist_msg)
+            time.sleep(dt)
 
     def wait_for_state(self, target_states, timeout=5.0):
         start_time = self.get_clock().now()
@@ -67,6 +115,29 @@ class StreamCommand(Node):
             if elapsed >= duration:
                 break
             rclpy.spin_once(self, timeout_sec=0.01)
+
+    def send_joint_stream(self, torso_pos, right_pos, left_pos, head_pos, dt):
+        goal_msg = StreamJoint.Goal()
+        cmd = StreamJointCommand()
+        
+        cmd.torso = JointCommand()
+        cmd.torso.position = torso_pos
+        cmd.torso.minimum_time = dt
+        
+        cmd.right_arm = JointCommand()
+        cmd.right_arm.position = right_pos
+        cmd.right_arm.minimum_time = dt
+        
+        cmd.left_arm = JointCommand()
+        cmd.left_arm.position = left_pos
+        cmd.left_arm.minimum_time = dt
+        
+        cmd.head = JointCommand()
+        cmd.head.position = head_pos
+        cmd.head.minimum_time = dt
+        
+        goal_msg.command = cmd
+        self.stream_joint_client.send_goal_async(goal_msg)
 
     def ensure_robot_ready(self):
         self.get_logger().info('Ensuring robot is powered on and servos are active...')
@@ -179,158 +250,88 @@ def main(args=None):
         node.get_logger().error('Failed to enable streams. Exiting.')
         return
 
+    # Wait a brief moment to flush any old state messages, then initialize the flag to True
+    node.spin_sleep(0.2)
+    node.robot_stream_state = True
+
     node.stream_joint_client.wait_for_server()
 
     try:
-        # Step 1: Zero Pose -> Ready Pose (Stream Joint Command in loop over 3.0 seconds)
-        node.get_logger().info('\n==========================================')
-        node.get_logger().info(' Step 1: Moving to Ready Pose via Stream (3.0s)')
-        node.get_logger().info('==========================================')
-        
-        duration = 3.0
-        num_points = int(duration * node.stream_hz)
+        # Start mobile base background thread
+        node.start_mobile_base_thread()
+
+        node.get_logger().info('Starting continuous whole-body stream execution loop.')
         dt = 1.0 / node.stream_hz
+        cycle = 0
 
-        for i in range(1, num_points + 1):
-            ratio = i / num_points
-            
-            curr_torso = [s + (t - s) * ratio for s, t in zip(node.zero_torso, node.ready_torso)]
-            curr_right = [s + (t - s) * ratio for s, t in zip(node.zero_right, node.ready_right)]
-            curr_left = [s + (t - s) * ratio for s, t in zip(node.zero_left, node.ready_left)]
-            curr_head = [s + (t - s) * ratio for s, t in zip(node.zero_head, node.ready_head)]
-            
-            goal_msg = StreamJoint.Goal()
-            cmd = StreamJointCommand()
-            
-            cmd.torso = JointCommand()
-            cmd.torso.position = curr_torso
-            cmd.torso.minimum_time = dt
-            
-            cmd.right_arm = JointCommand()
-            cmd.right_arm.position = curr_right
-            cmd.right_arm.minimum_time = dt
-            
-            cmd.left_arm = JointCommand()
-            cmd.left_arm.position = curr_left
-            cmd.left_arm.minimum_time = dt
-            
-            cmd.head = JointCommand()
-            cmd.head.position = curr_head
-            cmd.head.minimum_time = dt
-            
-            goal_msg.command = cmd
-            node.stream_joint_client.send_goal_async(goal_msg)
-            node.spin_sleep(dt)
+        while rclpy.ok():
+            if node.robot_stream_state is False:
+                node.get_logger().error("Stream has been deactivated by the driver. Exiting loop.")
+                break
 
-        node.get_logger().info('Step 1 complete. Waiting 1.0s...')
-        node.spin_sleep(1.0)
+            cycle += 1
+            if cycle > 3:
+                break
+            node.get_logger().info(f'\n==========================================')
+            node.get_logger().info(f' Cycle {cycle} - Step 1: Zero Pose -> Ready Pose (3.0s)')
+            node.get_logger().info(f'==========================================')
 
-        # Step 2: Return upper body to Zero Pose (over 3s) while mobile base does 2 round trips (8s total)
-        node.get_logger().info('\n==========================================')
-        node.get_logger().info(' Step 2: Returning to Zero Pose & Mobile Base Round Trips (8.0s)')
-        node.get_logger().info('==========================================')
+            # Zero -> Ready
+            duration = 3.0
+            num_points = int(duration * node.stream_hz)
+            for i in range(1, num_points + 1):
+                if node.robot_stream_state is False or not rclpy.ok():
+                    break
+                ratio = i / num_points
+                curr_torso = [s + (t - s) * ratio for s, t in zip(node.zero_torso, node.ready_torso)]
+                curr_right = [s + (t - s) * ratio for s, t in zip(node.zero_right, node.ready_right)]
+                curr_left = [s + (t - s) * ratio for s, t in zip(node.zero_left, node.ready_left)]
+                curr_head = [s + (t - s) * ratio for s, t in zip(node.zero_head, node.ready_head)]
+                
+                node.send_joint_stream(curr_torso, curr_right, curr_left, curr_head, dt)
+                node.spin_sleep(dt)
 
-        total_duration = 8.0
-        total_points = int(total_duration * node.stream_hz)
+            # Ready Pose Hold
+            node.get_logger().info(f' Cycle {cycle} - Step 2: Holding Ready Pose (1.0s)')
+            duration = 1.0
+            num_points = int(duration * node.stream_hz)
+            for i in range(1, num_points + 1):
+                if node.robot_stream_state is False or not rclpy.ok():
+                    break
+                node.send_joint_stream(node.ready_torso, node.ready_right, node.ready_left, node.ready_head, dt)
+                node.spin_sleep(dt)
 
-        for i in range(1, total_points + 1):
-            t = i * dt
-            
-            # Upper body joint command calculation
-            if t <= 3.0:
-                # Return to Zero Pose interpolation (over 3.0s)
-                ratio = t / 3.0
-                curr_torso = [s + (t_val - s) * ratio for s, t_val in zip(node.ready_torso, node.zero_torso)]
-                curr_right = [s + (t_val - s) * ratio for s, t_val in zip(node.ready_right, node.zero_right)]
-                curr_left = [s + (t_val - s) * ratio for s, t_val in zip(node.ready_left, node.zero_left)]
-                curr_head = [s + (t_val - s) * ratio for s, t_val in zip(node.ready_head, node.zero_head)]
-            else:
-                # Keep holding at Zero Pose
-                curr_torso = node.zero_torso
-                curr_right = node.zero_right
-                curr_left = node.zero_left
-                curr_head = node.zero_head
+            # Ready -> Zero
+            node.get_logger().info(f' Cycle {cycle} - Step 3: Ready Pose -> Zero Pose (3.0s)')
+            duration = 3.0
+            num_points = int(duration * node.stream_hz)
+            for i in range(1, num_points + 1):
+                if node.robot_stream_state is False or not rclpy.ok():
+                    break
+                ratio = i / num_points
+                curr_torso = [s + (t - s) * ratio for s, t in zip(node.ready_torso, node.zero_torso)]
+                curr_right = [s + (t - s) * ratio for s, t in zip(node.ready_right, node.zero_right)]
+                curr_left = [s + (t - s) * ratio for s, t in zip(node.ready_left, node.zero_left)]
+                curr_head = [s + (t - s) * ratio for s, t in zip(node.ready_head, node.zero_head)]
+                
+                node.send_joint_stream(curr_torso, curr_right, curr_left, curr_head, dt)
+                node.spin_sleep(dt)
 
-            # Mobile base command calculation (relative_t in 4-second cycles)
-            relative_t = t % 4.0
-            twist_msg = Twist()
-            if relative_t < 1.0:
-                twist_msg.linear.x = 0.15  # Forward
-            elif 1.0 <= relative_t < 2.0:
-                twist_msg.linear.x = 0.0   # Stop
-            elif 2.0 <= relative_t < 3.0:
-                twist_msg.linear.x = -0.15 # Backward
-            else:
-                twist_msg.linear.x = 0.0   # Stop
-
-            # Publish base command to mobility stream handler via cmd_vel
-            node.cmd_vel_pub.publish(twist_msg)
-
-            # Send joint stream command
-            goal_msg = StreamJoint.Goal()
-            cmd = StreamJointCommand()
-            
-            cmd.torso = JointCommand()
-            cmd.torso.position = curr_torso
-            cmd.torso.minimum_time = dt
-            
-            cmd.right_arm = JointCommand()
-            cmd.right_arm.position = curr_right
-            cmd.right_arm.minimum_time = dt
-            
-            cmd.left_arm = JointCommand()
-            cmd.left_arm.position = curr_left
-            cmd.left_arm.minimum_time = dt
-            
-            cmd.head = JointCommand()
-            cmd.head.position = curr_head
-            cmd.head.minimum_time = dt
-            
-            goal_msg.command = cmd
-            node.stream_joint_client.send_goal_async(goal_msg)
-            node.spin_sleep(dt)
-
-        # Stop mobile base explicitly
-        node.get_logger().info('Mobile base round trips finished. Stopping base.')
-        stop_twist = Twist()
-        node.cmd_vel_pub.publish(stop_twist)
-
-        # Step 3: Hold Zero Pose and stay still for 3.0 seconds
-        node.get_logger().info('\n==========================================')
-        node.get_logger().info(' Step 3: Holding Zero Pose (3.0s)')
-        node.get_logger().info('==========================================')
-
-        hold_duration = 3.0
-        hold_points = int(hold_duration * node.stream_hz)
-        for i in range(1, hold_points + 1):
-            goal_msg = StreamJoint.Goal()
-            cmd = StreamJointCommand()
-            
-            cmd.torso = JointCommand()
-            cmd.torso.position = node.zero_torso
-            cmd.torso.minimum_time = dt
-            
-            cmd.right_arm = JointCommand()
-            cmd.right_arm.position = node.zero_right
-            cmd.right_arm.minimum_time = dt
-            
-            cmd.left_arm = JointCommand()
-            cmd.left_arm.position = node.zero_left
-            cmd.left_arm.minimum_time = dt
-            
-            cmd.head = JointCommand()
-            cmd.head.position = node.zero_head
-            cmd.head.minimum_time = dt
-            
-            goal_msg.command = cmd
-            node.stream_joint_client.send_goal_async(goal_msg)
-            node.spin_sleep(dt)
-
-        node.get_logger().info('Finished whole-body stream execution.')
+            # Zero Pose Hold
+            node.get_logger().info(f' Cycle {cycle} - Step 4: Holding Zero Pose (1.0s)')
+            duration = 1.0
+            num_points = int(duration * node.stream_hz)
+            for i in range(1, num_points + 1):
+                if node.robot_stream_state is False or not rclpy.ok():
+                    break
+                node.send_joint_stream(node.zero_torso, node.zero_right, node.zero_left, node.zero_head, dt)
+                node.spin_sleep(dt)
 
     except KeyboardInterrupt:
         node.get_logger().info('KeyboardInterrupt received. Shutting down...')
     finally:
+        # Stop background thread
+        node.stop_mobile_base_thread()
         # Deactivate stream on exit
         if rclpy.ok():
             node.get_logger().info('Cleaning up: Deactivating stream control...')

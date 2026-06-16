@@ -16,6 +16,9 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
+find_package(rby1_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 # SDK Path Resolution
 if(DEFINED ENV{RBY1_SDK_PATH})
@@ -46,6 +49,9 @@ ament_target_dependencies(rby1_hardware
   rclcpp_lifecycle
   hardware_interface
   pluginlib
+  rby1_msgs
+  sensor_msgs
+  geometry_msgs
 )
 
 # Link SDK library
@@ -77,6 +83,9 @@ ament_export_dependencies(
   rclcpp_lifecycle
   hardware_interface
   pluginlib
+  rby1_msgs
+  sensor_msgs
+  geometry_msgs
 )
 
 ament_package()

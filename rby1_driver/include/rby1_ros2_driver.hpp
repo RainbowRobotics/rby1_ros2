@@ -110,7 +110,6 @@ namespace rby1_ros2{
             bool robot_initialize_flag{false};
             bool stream_active_{false};
             bool collision_enable_{true};
-            bool Pre_collision_detection_{false};
 
             // ── Per-part control flags ──────────────────────────────────────────
             // Indexed by PartIndex: MOBILE=0, TORSO=1, RIGHT_ARM=2, LEFT_ARM=3, HEAD=4
@@ -169,6 +168,11 @@ namespace rby1_ros2{
             rclcpp::Service<rby1_msgs::srv::ControlManagerCommand>::SharedPtr control_manager_service_;
             rclcpp::Service<rby1_msgs::srv::StateOnOff>::SharedPtr stream_control_service_;
             rclcpp::Service<rby1_msgs::srv::SetTrajectoryImpedance>::SharedPtr set_trajectory_impedance_service_;
+            rclcpp::Service<rby1_msgs::srv::StateOnOff>::SharedPtr hardware_control_service_;
+
+            std::atomic<bool> hardware_control_active_{false};
+            std::atomic<uint64_t> last_stream_command_time_ns_{0};
+            rclcpp::TimerBase::SharedPtr stream_safety_timer_;
 
             // Impedance state for follow_joint_trajectory
             bool   trajectory_impedance_enabled_torso_{false};
@@ -190,7 +194,11 @@ namespace rby1_ros2{
             void set_trajectory_impedance_callback(
                 const std::shared_ptr<rby1_msgs::srv::SetTrajectoryImpedance::Request> request,
                 std::shared_ptr<rby1_msgs::srv::SetTrajectoryImpedance::Response> response);
+            void hardware_control_callback(const std::shared_ptr<rby1_msgs::srv::StateOnOff::Request> request,
+                                           std::shared_ptr<rby1_msgs::srv::StateOnOff::Response> response);
             void cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg);
+            void deactivate_all_streams();
+            void check_stream_safety();
             
             geometry_msgs::msg::Pose matrix_to_pose(const Eigen::Matrix4d& matrix);
 

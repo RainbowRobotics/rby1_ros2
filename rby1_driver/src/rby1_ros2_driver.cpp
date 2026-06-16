@@ -126,6 +126,13 @@ namespace rby1_ros2{
 
                 set_trajectory_impedance_service_ = this->create_service<rby1_msgs::srv::SetTrajectoryImpedance>(
                     "set_trajectory_impedance", std::bind(&RBY1_ROS2_DRIVER<ModelType>::set_trajectory_impedance_callback, this, _1, _2));
+
+                hardware_control_service_ = this->create_service<rby1_msgs::srv::StateOnOff>(
+                    "hardware_control", std::bind(&RBY1_ROS2_DRIVER<ModelType>::hardware_control_callback, this, _1, _2));
+
+                last_stream_command_time_ns_ = this->now().nanoseconds();
+                stream_safety_timer_ = this->create_wall_timer(
+                    std::chrono::milliseconds(100), std::bind(&RBY1_ROS2_DRIVER<ModelType>::check_stream_safety, this));
  
                 /* we need to add tool flange on/off service*/
  
@@ -308,8 +315,6 @@ namespace rby1_ros2{
         this->declare_parameter<double>("collision_threshold", 0.01);
         this->declare_parameter<bool>("publish_battery_state", true);
         this->declare_parameter<bool>("publish_tool_flange_state", true);
-
-        this->declare_parameter<bool>("pre_self_collision_check_enable", false);
         
         this->get_parameter("robot_ip", address);
         this->get_parameter("model", model);
@@ -335,8 +340,6 @@ namespace rby1_ros2{
         this->get_parameter("collision_threshold", collision_threshold_);
         this->get_parameter("publish_battery_state", publish_battery_state_);
         this->get_parameter("publish_tool_flange_state", publish_tool_flange_state_);
-
-        this->get_parameter("pre_self_collision_check_enable", Pre_collision_detection_);
         this->get_parameter("stream_hz", stream_hz_);
         collision_enable_ = true;
 
@@ -1071,6 +1074,10 @@ namespace rby1_ros2{
         const rclcpp_action::GoalUUID & uuid, std::shared_ptr<const FollowJointTrajectory::Goal> goal) {
         RCLCPP_INFO(this->get_logger(), "Received FollowJointTrajectory request");
         (void)uuid;
+        if (hardware_control_active_) {
+            RCLCPP_WARN(this->get_logger(), "Rejecting FollowJointTrajectory: Hardware control is active.");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
         if (goal->trajectory.points.empty()) {
             RCLCPP_ERROR(this->get_logger(), "Trajectory has no points.");
             return rclcpp_action::GoalResponse::REJECT;
@@ -1191,7 +1198,7 @@ namespace rby1_ros2{
         }
 
         // Pre-collision check per waypoint
-        if (Pre_collision_detection_ && dynamics_ && dyn_state_) {
+        if (dynamics_ && dyn_state_) {
             for (size_t i = 0; i < trajectory.points.size(); ++i) {
                 const auto& pt = trajectory.points[i];
                 Eigen::Vector<double, ModelType::kRobotDOF> tq =
@@ -1217,11 +1224,7 @@ namespace rby1_ros2{
                 }
                 auto reason = get_predicted_collision_reason(tq);
                 if (reason.has_value()) {
-                    result->error_code = FollowJointTrajectory::Result::PATH_TOLERANCE_VIOLATED;
-                    result->error_string = reason.value() + " at waypoint " + std::to_string(i);
-                    RCLCPP_WARN(this->get_logger(), "\033[1;33m[PREDICTIVE COLLISION] %s\033[0m", result->error_string.c_str());
-                    try { goal_handle->abort(result); } catch (...) {}
-                    return;
+                    RCLCPP_WARN(this->get_logger(), "\033[1;33m[PREDICTIVE COLLISION WARNING] %s at waypoint %zu\033[0m", reason.value().c_str(), i);
                 }
             }
         }
@@ -1301,9 +1304,11 @@ namespace rby1_ros2{
 
                     try {
                         std::lock_guard<std::mutex> sl(stream_mutex_);
-                        if (upper_body_stream_handler_)
+                        if (upper_body_stream_handler_) {
                             upper_body_stream_handler_->SendCommand(
                                 rb::RobotCommandBuilder().SetCommand(comp));
+                            last_stream_command_time_ns_ = this->now().nanoseconds();
+                        }
                     } catch (const std::exception& e) {
                         RCLCPP_ERROR(this->get_logger(), "[FJT-Normal] SendCommand error: %s", e.what());
                     }
@@ -1338,6 +1343,11 @@ namespace rby1_ros2{
         RCLCPP_INFO(this->get_logger(), "Received Rby1JointCommand request");
         (void)uuid;
         (void)goal; // We will do validation in execute
+
+        if (hardware_control_active_) {
+            RCLCPP_WARN(this->get_logger(), "Rejecting Rby1JointCommand: Hardware control is active.");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -1438,7 +1448,7 @@ namespace rby1_ros2{
             }
 
             // Pre-collision detection
-            if (Pre_collision_detection_) {
+            if (dynamics_ && dyn_state_) {
                 Eigen::Vector<double, ModelType::kRobotDOF> target_q =
                     Eigen::Vector<double, ModelType::kRobotDOF>::Zero();
                 {
@@ -1476,10 +1486,7 @@ namespace rby1_ros2{
                 update_tq(goal->head, "head");
                 auto reason = get_predicted_collision_reason(target_q);
                 if (reason.has_value()) {
-                    result->success = false; result->finish_code = reason.value();
-                    RCLCPP_WARN(this->get_logger(), "\033[1;33m[PREDICTIVE COLLISION REJECTED] %s\033[0m", reason.value().c_str());
-                    try { goal_handle->abort(result); } catch (...) {}
-                    return;
+                    RCLCPP_WARN(this->get_logger(), "\033[1;33m[PREDICTIVE COLLISION WARNING] %s\033[0m", reason.value().c_str());
                 }
             }
 
@@ -1518,6 +1525,7 @@ namespace rby1_ros2{
                         try { goal_handle->abort(result); } catch (...) {} return;
                     }
                     upper_body_stream_handler_->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder));
+                    last_stream_command_time_ns_ = this->now().nanoseconds();
                 }
                 double max_mt = std::max({goal->torso.minimum_time, goal->right_arm.minimum_time,
                                           goal->left_arm.minimum_time, goal->head.minimum_time});
@@ -1600,6 +1608,11 @@ namespace rby1_ros2{
         RCLCPP_INFO(this->get_logger(), "Received Rby1CartesianCommand request");
         (void)uuid;
         (void)goal;
+
+        if (hardware_control_active_) {
+            RCLCPP_WARN(this->get_logger(), "Rejecting Rby1CartesianCommand: Hardware control is active.");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
 
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -1692,7 +1705,7 @@ namespace rby1_ros2{
             }
 
             // Pre-collision detection (IK and collision check)
-            if (Pre_collision_detection_) {
+            if (dynamics_ && dyn_state_) {
                 std::vector<typename rb::OptimalControl<ModelType::kRobotDOF>::LinkTarget> link_targets;
                 auto add_target_helper = [&](const rby1_msgs::msg::CartesianCommand& cmd) -> bool {
                     if (cmd.ref_link.empty() && cmd.target_link.empty()) return true;
@@ -1731,9 +1744,7 @@ namespace rby1_ros2{
                     }
                     auto reason = get_predicted_collision_reason(solved_q.value());
                     if (reason.has_value()) {
-                        result->success = false;
-                        result->finish_code = reason.value();
-                        try { goal_handle->abort(result); } catch (...) {} return;
+                        RCLCPP_WARN(this->get_logger(), "\033[1;33m[PREDICTIVE COLLISION WARNING] %s\033[0m", reason.value().c_str());
                     }
                 }
             }
@@ -1771,6 +1782,7 @@ namespace rby1_ros2{
                         try { goal_handle->abort(result); } catch (...) {} return;
                     }
                     upper_body_stream_handler_->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder));
+                    last_stream_command_time_ns_ = this->now().nanoseconds();
                 }
                 double max_mt = std::max({goal->torso.minimum_time, goal->right_arm.minimum_time, goal->left_arm.minimum_time});
                 if (max_mt <= 0.0) max_mt = robot_parameter_.minimum_time;
@@ -2007,6 +2019,11 @@ namespace rby1_ros2{
         try {
             {
                 std::lock_guard<std::mutex> lock(stream_mutex_);
+                if (hardware_control_active_) {
+                    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                                         "cmd_vel received but hardware control is active. Ignoring command.");
+                    return;
+                }
                 if (!stream_active_ || !mobility_stream_handler_) {
                     RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                                          "cmd_vel received but mobility stream control is not active. Ignoring command.");
@@ -2029,9 +2046,11 @@ namespace rby1_ros2{
             std::lock_guard<std::mutex> lock(stream_mutex_);
             if (stream_active_ && mobility_stream_handler_) {
                 mobility_stream_handler_->SendCommand(robot_cmd);
+                last_stream_command_time_ns_ = this->now().nanoseconds();
             }
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Exception in cmd_vel_callback: %s", e.what());
+            deactivate_all_streams();
         }
     }
 
@@ -2088,7 +2107,62 @@ namespace rby1_ros2{
             }
             response->success = true;
             response->message = "Persistent stream control deactivated.";
-            RCLCPP_INFO(this->get_logger(), "Persistent stream control deactivated.");
+        }
+    }
+
+    template <typename ModelType>
+    void RBY1_ROS2_DRIVER<ModelType>::deactivate_all_streams() {
+        std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+        if (stream_active_) {
+            RCLCPP_WARN(this->get_logger(), "\033[1;31m[STREAM SAFETY WARNING] Stream failure detected! Deactivating all streams.\033[0m");
+            stream_active_ = false;
+            if (upper_body_stream_handler_) {
+                try { upper_body_stream_handler_->Cancel(); } catch (...) {}
+                upper_body_stream_handler_.reset();
+            }
+            if (mobility_stream_handler_) {
+                try { mobility_stream_handler_->Cancel(); } catch (...) {}
+                mobility_stream_handler_.reset();
+            }
+            for (size_t i = 0; i < PART_COUNT; ++i) {
+                is_controlling_[i].store(false, std::memory_order_release);
+            }
+        }
+    }
+
+    template <typename ModelType>
+    void RBY1_ROS2_DRIVER<ModelType>::hardware_control_callback(
+        const std::shared_ptr<rby1_msgs::srv::StateOnOff::Request> request,
+        std::shared_ptr<rby1_msgs::srv::StateOnOff::Response> response) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (request->state) {
+            hardware_control_active_ = true;
+            RCLCPP_INFO(this->get_logger(), "Hardware control claimed. Rejecting/blocking non-hardware command sources.");
+            response->success = true;
+            response->message = "Hardware control activated.";
+        } else {
+            hardware_control_active_ = false;
+            deactivate_all_streams();
+            RCLCPP_INFO(this->get_logger(), "Hardware control released.");
+            response->success = true;
+            response->message = "Hardware control deactivated.";
+        }
+    }
+
+    template <typename ModelType>
+    void RBY1_ROS2_DRIVER<ModelType>::check_stream_safety() {
+        if (stream_active_) {
+            uint64_t now_ns = this->now().nanoseconds();
+            uint64_t last_ns = last_stream_command_time_ns_.load();
+            double elapsed = static_cast<double>(now_ns - last_ns) * 1e-9;
+            if (elapsed > 1.0) {
+                RCLCPP_WARN(this->get_logger(), "\033[1;31m[STREAM TIMEOUT] No stream commands received for %.2f seconds! Deactivating all streams.\033[0m", elapsed);
+                deactivate_all_streams();
+                if (hardware_control_active_) {
+                    hardware_control_active_ = false;
+                    RCLCPP_WARN(this->get_logger(), "Hardware control released due to stream timeout.");
+                }
+            }
         }
     }
 
@@ -2590,6 +2664,10 @@ namespace rby1_ros2{
         const rclcpp_action::GoalUUID& uuid, std::shared_ptr<const StreamJoint::Goal> goal) {
         (void)uuid;
         (void)goal;
+        if (hardware_control_active_) {
+            RCLCPP_WARN(this->get_logger(), "Rejecting StreamJoint: Hardware control is active.");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
     }
 
@@ -2761,9 +2839,11 @@ namespace rby1_ros2{
             std::lock_guard<std::mutex> stream_lock(stream_mutex_);
             if (upper_body_stream_handler_) {
                 upper_body_stream_handler_->SendCommand(robot_cmd);
+                last_stream_command_time_ns_ = this->now().nanoseconds();
             }
         } catch (const std::exception& e) {
             RCLCPP_ERROR(this->get_logger(), "Error in StreamJoint SendCommand: %s", e.what());
+            deactivate_all_streams();
             result->success = false;
             try { goal_handle->abort(result); } catch (...) {}
             return;
@@ -2778,6 +2858,10 @@ namespace rby1_ros2{
         const rclcpp_action::GoalUUID& uuid, std::shared_ptr<const StreamCartesian::Goal> goal) {
         (void)uuid;
         (void)goal;
+        if (hardware_control_active_) {
+            RCLCPP_WARN(this->get_logger(), "Rejecting StreamCartesian: Hardware control is active.");
+            return rclcpp_action::GoalResponse::REJECT;
+        }
         return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
     }
 
@@ -3002,9 +3086,11 @@ namespace rby1_ros2{
                 std::lock_guard<std::mutex> stream_lock(stream_mutex_);
                 if (upper_body_stream_handler_) {
                     upper_body_stream_handler_->SendCommand(robot_cmd);
+                    last_stream_command_time_ns_ = this->now().nanoseconds();
                 }
             } catch (const std::exception& e) {
                 RCLCPP_ERROR(this->get_logger(), "Error in StreamCartesian SendCommand: %s", e.what());
+                deactivate_all_streams();
                 result->success = false;
                 try { goal_handle->abort(result); } catch (...) {}
                 return;

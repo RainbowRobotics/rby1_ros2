@@ -1,12 +1,20 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
-    <xacro:macro name="rby1_ros2_control" params="name initial_positions_file">
+    <xacro:macro name="rby1_ros2_control" params="name initial_positions_file use_fake_hardware:=true robot_ip:=127.0.0.1:50051 model:=m collision_check_enable:=false collision_threshold:=0.01">
         <xacro:property name="initial_positions" value="${load_yaml(initial_positions_file)['initial_positions']}"/>
 
         <ros2_control name="${name}" type="system">
             <hardware>
-                <!-- By default, set up controllers for simulation. This won't work on real hardware -->
-                <plugin>mock_components/GenericSystem</plugin>
+                <xacro:if value="${use_fake_hardware}">
+                    <plugin>mock_components/GenericSystem</plugin>
+                </xacro:if>
+                <xacro:unless value="${use_fake_hardware}">
+                    <plugin>rby1_hardware/RBY1SystemHardware</plugin>
+                    <param name="robot_ip">${robot_ip}</param>
+                    <param name="model">${model}</param>
+                    <param name="collision_check_enable">${collision_check_enable}</param>
+                    <param name="collision_threshold">${collision_threshold}</param>
+                </xacro:unless>
             </hardware>
             <joint name="left_arm_0">
                 <command_interface name="position"/>

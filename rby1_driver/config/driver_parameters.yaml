@@ -14,7 +14,7 @@
     servo_on: ["all"] # example: ["torso"], ["right_arm, left_arm"] ,["right_arm_1, left_arm_3"], ["all"]
 
     # drive parameters
-    get_state_period: 2.0 # 0.01 # seconds
+    get_state_period: 0.01 # seconds
     minimum_time: 2.0 # seconds
     stream_hz: 30.0
 
@@ -34,7 +34,6 @@
     fault_reset_trigger: false 
     
     # Collision options
-    pre_self_collision_check_enable: false
     collision_threshold: 0.02 # meter
 
     # Status publish triggers
