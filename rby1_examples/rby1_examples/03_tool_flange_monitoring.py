@@ -74,7 +74,7 @@ class ToolFlangeMonitoring(Node):
                 sys.exit(1)
 
         # Call service to turn on 12V tool flange power
-        self.send_tool_flange_request(True, '12')
+        # self.send_tool_flange_request(True, '12')
 
         # Timer for 10 Hz dynamic console updates
         self.timer = self.create_timer(1, self.render_dashboard)

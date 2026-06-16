@@ -109,7 +109,6 @@ namespace rby1_ros2{
 
             bool robot_initialize_flag{false};
             bool stream_active_{false};
-            bool received_stream_command_{false};
             bool collision_enable_{true};
             bool Pre_collision_detection_{false};
 
@@ -124,14 +123,8 @@ namespace rby1_ros2{
             std::atomic<bool> is_controlling_[PART_COUNT]{}; // true while that part is commanded
             bool any_part_controlling() const;
 
-            // ── Whole-body stream convergence ──────────────────────────────────
-            // 0.05 degrees converted to radians
-            static constexpr double kWbConvergenceRad = 0.0008;
-            std::atomic<uint64_t> wb_command_seq_{0}; // incremented on each new WB/stream cmd
-            bool wait_for_wb_convergence(const std::vector<size_t>& parts,
-                                          uint64_t seq, double timeout_sec = 10.0);
-            void update_stream_target_for_joint_goal(
-                const typename rby1_msgs::action::Rby1JointCommand::Goal& goal);
+            std::atomic<uint64_t> command_seq_{0}; // incremented on each new stream cmd
+
 
             std::atomic<bool> has_printed_collision_log_{false};
             int get_link_index(const std::string& name);
@@ -151,9 +144,6 @@ namespace rby1_ros2{
             void build_mobility_cmd(
                 rb::MobilityCommandBuilder& builder,
                 double vx, double vy, double wz, double minimum_time);
-            void build_stream_joint_part(
-                const Eigen::VectorXd& q, double minimum_time, const std::string& part_name,
-                rb::BodyComponentBasedCommandBuilder& body_comp, rb::ComponentBasedCommandBuilder& comp);
 
             // Timer for 100Hz publishing
             rclcpp::TimerBase::SharedPtr joint_state_timer_;
@@ -276,21 +266,9 @@ namespace rby1_ros2{
             void cancel_control_callback(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
                                          std::shared_ptr<std_srvs::srv::Trigger::Response> response);
             
-            std::unique_ptr<rb::RobotCommandStreamHandler<ModelType>> stream_handler_;
+            std::unique_ptr<rb::RobotCommandStreamHandler<ModelType>> upper_body_stream_handler_;
+            std::unique_ptr<rb::RobotCommandStreamHandler<ModelType>> mobility_stream_handler_;
             std::shared_ptr<rclcpp_action::ServerGoalHandle<FollowJointTrajectory>> active_follow_joint_trajectory_goal_{nullptr};
-
-            std::array<double, 25> stream_target_;
-            std::mutex stream_target_mutex_;
-            std::thread stream_thread_;
-            void stream_loop();
-            rclcpp::Time last_update_time_;
-            
-            rclcpp::Time last_stream_time_torso_{0, 0, RCL_ROS_TIME};
-            rclcpp::Time last_stream_time_right_arm_{0, 0, RCL_ROS_TIME};
-            rclcpp::Time last_stream_time_left_arm_{0, 0, RCL_ROS_TIME};
-            rclcpp::Time last_stream_time_head_{0, 0, RCL_ROS_TIME};
-            rclcpp::Time last_stream_time_mobility_{0, 0, RCL_ROS_TIME};
-            bool stream_mode_whole_body_{false};
 
             bool process_joint_part(const rby1_msgs::msg::JointCommand& cmd,
                                     const std::string& part_name,

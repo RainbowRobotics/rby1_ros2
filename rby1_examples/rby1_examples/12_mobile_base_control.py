@@ -175,7 +175,7 @@ def main(args=None):
     rclpy.init(args=args)
     controller = MobileBaseControl()
 
-    velocity = 0.15
+    velocity = 0.1
     angular_velocity = 0.25
 
     # Ensure Robot is Power ON and Servo ON
@@ -209,7 +209,7 @@ def main(args=None):
 
     try:
         # Phase 1: Drive Forward
-        controller.get_logger().info('Driving forward at 0.15 m/s for 2.0 seconds...')
+        controller.get_logger().info('Driving forward at {velocity} m/s for 2.0 seconds...')
         start_time = time.time()
         while time.time() - start_time < 2.0 and rclpy.ok():
             controller.send_velocity(velocity, 0.0, 0.0)
@@ -225,7 +225,7 @@ def main(args=None):
             time.sleep(0.04)
 
         # Phase 2: Drive Backward
-        controller.get_logger().info('Driving backward at -0.15 m/s for 2.0 seconds...')
+        controller.get_logger().info(f'Driving backward at {-velocity} m/s for 2.0 seconds...')
         start_time = time.time()
         while time.time() - start_time < 2.0 and rclpy.ok():
             controller.send_velocity(-velocity, 0.0, 0.0)
@@ -241,7 +241,7 @@ def main(args=None):
             time.sleep(0.04)
 
         # Phase 3: Rotate
-        controller.get_logger().info('Rotating base at 0.25 rad/s for 2.0 seconds...')
+        controller.get_logger().info(f'Rotating base at {angular_velocity} rad/s for 2.0 seconds...')
         start_time = time.time()
         while time.time() - start_time < 2.0 and rclpy.ok():
             controller.send_velocity(0.0, 0.0, angular_velocity)
@@ -256,8 +256,24 @@ def main(args=None):
             rclpy.spin_once(controller, timeout_sec=0.01)
             time.sleep(0.04)
 
-        # Phase 4: Drive Left (lateral translation)
-        controller.get_logger().info('Driving left at 0.15 m/s for 2.0 seconds (mecanum base only)...')
+        # Phase 4: Rotate
+        controller.get_logger().info(f'Rotating base at {angular_velocity} rad/s for 2.0 seconds...')
+        start_time = time.time()
+        while time.time() - start_time < 2.0 and rclpy.ok():
+            controller.send_velocity(0.0, 0.0, -angular_velocity)
+            rclpy.spin_once(controller, timeout_sec=0.01)
+            time.sleep(0.04)
+
+        # Stop
+        controller.get_logger().info('Stopping base for 1.0 second...')
+        start_time = time.time()
+        while time.time() - start_time < 1.0 and rclpy.ok():
+            controller.send_velocity(0.0, 0.0, 0.0)
+            rclpy.spin_once(controller, timeout_sec=0.01)
+            time.sleep(0.04)
+
+        # Phase 5: Drive Left (lateral translation)
+        controller.get_logger().info(f'Driving left at {velocity} m/s for 2.0 seconds (mecanum base only)...')
         start_time = time.time()
         while time.time() - start_time < 2.0 and rclpy.ok():
             controller.send_velocity(0.0, velocity, 0.0)
@@ -270,10 +286,10 @@ def main(args=None):
         while time.time() - start_time < 1.0 and rclpy.ok():
             controller.send_velocity(0.0, 0.0, 0.0)
             rclpy.spin_once(controller, timeout_sec=0.01)
-            time.sleep(0.04)
+            time.sleep(0.01)
 
-        # Phase 5: Drive Right (lateral translation)
-        controller.get_logger().info('Driving right at -0.15 m/s for 2.0 seconds (mecanum base only)...')
+        # Phase 6: Drive Right (lateral translation)
+        controller.get_logger().info(f'Driving right at {-velocity} m/s for 2.0 seconds (mecanum base only)...')
         start_time = time.time()
         while time.time() - start_time < 2.0 and rclpy.ok():
             controller.send_velocity(0.0, -velocity, 0.0)
