@@ -98,6 +98,22 @@ hardware_interface::CallbackReturn RBY1SystemHardware::on_init(const hardware_in
     "cmd_vel", 10, std::bind(&RBY1SystemHardware::cmd_vel_callback, this, std::placeholders::_1));
 
   hardware_control_client_ = node_->create_client<rby1_msgs::srv::StateOnOff>("/hardware_control");
+  power_control_client_ = node_->create_client<rby1_msgs::srv::StateOnOff>("/robot_power");
+  servo_control_client_ = node_->create_client<rby1_msgs::srv::StateOnOff>("/robot_servo");
+
+  auto vel_limit_it = info_.hardware_parameters.find("velocity_limit");
+  if (vel_limit_it != info_.hardware_parameters.end()) {
+    try { velocity_limit_ = std::stod(vel_limit_it->second); } catch(...) { velocity_limit_ = 4.712388; }
+  } else {
+    velocity_limit_ = 4.712388;
+  }
+  
+  auto acc_limit_it = info_.hardware_parameters.find("acceleration_limit");
+  if (acc_limit_it != info_.hardware_parameters.end()) {
+    try { acceleration_limit_ = std::stod(acc_limit_it->second); } catch(...) { acceleration_limit_ = 1.0; }
+  } else {
+    acceleration_limit_ = 1.0;
+  }
 
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -207,7 +223,7 @@ hardware_interface::CallbackReturn RBY1SystemHardware::on_activate(const rclcpp_
     }
   }
 
-  // Power On and Servo On
+  // Power On and Servo On via Driver Services
   std::string power_dev = "all";
   std::string servo_dev = "all";
   auto power_dev_it = info_.hardware_parameters.find("power_on");
@@ -219,13 +235,48 @@ hardware_interface::CallbackReturn RBY1SystemHardware::on_activate(const rclcpp_
     servo_dev = servo_dev_it->second;
   }
 
-  RCLCPP_INFO(rclcpp::get_logger("RBY1SystemHardware"), "Powering ON device: %s...", power_dev.c_str());
-  robot_->power_on(power_dev);
-  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  // 1. Wait for robot_power service and call it
+  RCLCPP_INFO(rclcpp::get_logger("RBY1SystemHardware"), "Requesting Power ON [%s] via driver...", power_dev.c_str());
+  if (!power_control_client_->wait_for_service(std::chrono::seconds(5))) {
+    RCLCPP_FATAL(rclcpp::get_logger("RBY1SystemHardware"), "Service /robot_power not available.");
+    robot_->disconnect();
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  auto power_req = std::make_shared<rby1_msgs::srv::StateOnOff::Request>();
+  power_req->state = true;
+  power_req->parameters = power_dev;
+  
+  auto power_future = power_control_client_->async_send_request(power_req);
+  if (rclcpp::spin_until_future_complete(node_, power_future, std::chrono::seconds(15)) != rclcpp::FutureReturnCode::SUCCESS) {
+    RCLCPP_FATAL(rclcpp::get_logger("RBY1SystemHardware"), "Timeout waiting for /robot_power service.");
+    robot_->disconnect();
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  if (!power_future.get()->success) {
+    RCLCPP_FATAL(rclcpp::get_logger("RBY1SystemHardware"), "Failed to power ON via driver: %s", power_future.get()->message.c_str());
+    robot_->disconnect();
+    return hardware_interface::CallbackReturn::ERROR;
+  }
 
-  RCLCPP_INFO(rclcpp::get_logger("RBY1SystemHardware"), "Servo ON device: %s...", servo_dev.c_str());
-  if (!robot_->servo_on(servo_dev)) {
-    RCLCPP_FATAL(rclcpp::get_logger("RBY1SystemHardware"), "Failed to enable Servo ON for device: %s", servo_dev.c_str());
+  // 2. Wait for robot_servo service and call it
+  RCLCPP_INFO(rclcpp::get_logger("RBY1SystemHardware"), "Requesting Servo ON [%s] via driver...", servo_dev.c_str());
+  if (!servo_control_client_->wait_for_service(std::chrono::seconds(5))) {
+    RCLCPP_FATAL(rclcpp::get_logger("RBY1SystemHardware"), "Service /robot_servo not available.");
+    robot_->disconnect();
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  auto servo_req = std::make_shared<rby1_msgs::srv::StateOnOff::Request>();
+  servo_req->state = true;
+  servo_req->parameters = servo_dev;
+  
+  auto servo_future = servo_control_client_->async_send_request(servo_req);
+  if (rclcpp::spin_until_future_complete(node_, servo_future, std::chrono::seconds(15)) != rclcpp::FutureReturnCode::SUCCESS) {
+    RCLCPP_FATAL(rclcpp::get_logger("RBY1SystemHardware"), "Timeout waiting for /robot_servo service.");
+    robot_->disconnect();
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+  if (!servo_future.get()->success) {
+    RCLCPP_FATAL(rclcpp::get_logger("RBY1SystemHardware"), "Failed to enable Servo ON via driver: %s", servo_future.get()->message.c_str());
     robot_->disconnect();
     return hardware_interface::CallbackReturn::ERROR;
   }
@@ -394,7 +445,7 @@ hardware_interface::return_type RBY1SystemHardware::write(const rclcpp::Time & /
   }
 
   // Send stream command to upper body joints
-  robot_->send_stream_command(sdk_target_positions);
+  robot_->send_stream_command(sdk_target_positions, velocity_limit_, acceleration_limit_);
 
   // Process and send mobility command if twist has been received and is fresh (< 0.5s)
   double vx = 0.0;

@@ -5,6 +5,8 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+
+
 # Find PythonInterp policy warning suppression
 if(POLICY CMP0148)
   cmake_policy(SET CMP0148 OLD)
@@ -37,6 +39,9 @@ include_directories(
 
 # Export plugins
 pluginlib_export_plugin_description_file(hardware_interface rby1_hardware.xml)
+
+set(CMAKE_INSTALL_RPATH "${RBY1_SDK_PATH}/build/src")
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 
 # Create hardware interface shared library
 add_library(rby1_hardware SHARED
