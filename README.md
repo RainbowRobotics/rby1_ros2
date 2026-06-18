@@ -3,8 +3,6 @@
 > [!CAUTION]
 > ## The current driver is in beta. For safe use, please test the features in a simulation first.
 > Please note that package contents, APIs, topics, and parameters may change continuously during the beta period.
-> ## The moveit and hardware packages are currently under development. 
-> Please note that they are not available for use.
 
 ## Overview
 
@@ -33,7 +31,20 @@ It wraps the RBY1 C++ SDK into a ROS 2 node, providing state monitoring and mult
 
 <https://hub.docker.com/r/rainbowroboticsofficial/rby1-sim>
 
-### 1-4. Environment Setup
+### 1-4. Install MoveIt 2
+
+- Please proceed up to  `~ Optional: add the previous command to your .bashrc`
+
+<https://moveit.picknik.ai/humble/doc/tutorials/getting_started/getting_started.html>
+
+- Install additional tool
+
+```bash
+sudo apt install ros-humble-gripper-controllers
+sudo apt install ros-humble-joint-trajectory-controller
+```
+
+### 1-5. Environment Setup
 
 Add the following lines to `~/.bashrc`:
 
@@ -304,6 +315,14 @@ The driver checks the **target pose** for collisions *before* executing any join
 | `rby1_msgs` | Custom message, service, and action definitions for robot control and state. |
 | `rby1_examples` | Python example scripts demonstrating all major driver features. |
 | `rby1_description` | Robot description for ROS, demonstrating URDF and Mesh files, and simple visualization launch file. |
+| `rby1_hardware` | `ros2_control` SystemInterface plugin (`RBY1SystemHardware`). Bridges the RBY1 SDK to MoveIt 2 via the standard `ros2_control` hardware interface pipeline. |
+| `rby1_moveit_a_1_0` | MoveIt 2 configuration package for **Model A v1.0** (SRDF, controllers, kinematics, joint limits). |
+| `rby1_moveit_a_1_1` | MoveIt 2 configuration package for **Model A v1.1**. |
+| `rby1_moveit_a_1_2` | MoveIt 2 configuration package for **Model A v1.2**. |
+| `rby1_moveit_m_1_0` | MoveIt 2 configuration package for **Model M v1.0**. |
+| `rby1_moveit_m_1_1` | MoveIt 2 configuration package for **Model M v1.1**. |
+| `rby1_moveit_m_1_2` | MoveIt 2 configuration package for **Model M v1.2**. |
+| `rby1_moveit_m_1_3` | MoveIt 2 configuration package for **Model M v1.3**. |
 
 ### 5-2. System Architecture
 
@@ -480,3 +499,92 @@ The `RobotState.control_manager_state` field (and the `robot_state` topic) uses 
 | `output_voltage` | `int32` | Output voltage in millivolts |
 | `digital_input_a/b` | `bool` | Digital input A/B state |
 | `digital_output_a/b` | `bool` | Digital output A/B state |
+
+---
+
+## 9. MoveIt 2 Integration (`rby1_hardware` + `rby1_moveit_*`)
+
+The `rby1_hardware` package provides a `ros2_control` `SystemInterface` plugin (`rby1_hardware/RBY1SystemHardware`) that bridges the RBY1 SDK to MoveIt 2 via the standard `ros2_control` pipeline.  
+Each `rby1_moveit_*` package contains the complete MoveIt 2 configuration (SRDF, kinematics, joint limits, controller configs) for a specific model and firmware version.
+
+### 9-1. Available MoveIt Packages
+
+| Package | Model | Firmware |
+|---------|-------|---------|
+| `rby1_moveit_a_1_0` | RBY1-A | v1.0 |
+| `rby1_moveit_a_1_1` | RBY1-A | v1.1 |
+| `rby1_moveit_a_1_2` | RBY1-A | v1.2 |
+| `rby1_moveit_m_1_0` | RBY1-M | v1.0 |
+| `rby1_moveit_m_1_1` | RBY1-M | v1.1 |
+| `rby1_moveit_m_1_2` | RBY1-M | v1.2 |
+| `rby1_moveit_m_1_3` | RBY1-M | v1.3 |
+
+### 9-2. Launch MoveIt with Real Hardware
+
+> [!IMPORTANT]
+> **Real hardware mode** requires `rby1_driver` to be running first.  
+> `RBY1SystemHardware` claims hardware control from the driver via the `/hardware_control` service on activation.
+
+**Step 1** — Start the driver (first terminal):
+
+```bash
+source install/setup.bash
+ros2 launch rby1_driver rby1_ros2_driver.launch.py
+```
+
+**Step 2** — Launch MoveIt (second terminal), selecting the package that matches your model and firmware version:
+
+```bash
+source install/setup.bash
+
+# Real hardware (default: use_fake_hardware:=false)
+ros2 launch rby1_moveit_m_1_2 demo.launch.py
+
+# With a custom robot IP
+ros2 launch rby1_moveit_m_1_2 demo.launch.py robot_ip:=192.168.30.1:50051
+
+# Fake hardware / simulation (no real robot required)
+ros2 launch rby1_moveit_m_1_2 demo.launch.py use_fake_hardware:=true
+```
+
+Replace `rby1_moveit_m_1_2` with the package matching your robot.
+
+### 9-3. Launch Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `use_fake_hardware` | `false` | `true` = `mock_components/GenericSystem` (no robot needed); `false` = `RBY1SystemHardware` (real robot) |
+| `robot_ip` | `127.0.0.1:50051` | RBY1 SDK gRPC address and port |
+| `model` | `m` or `a` | Robot model type passed to the hardware plugin |
+
+### 9-4. ros2_control Controllers
+
+Each MoveIt package spawns the following controllers:
+
+| Controller | Type | Controlled Joints |
+|------------|------|------------------|
+| `right_arm_controller` | `JointTrajectoryController` | right_arm_0 ~ right_arm_6 |
+| `left_arm_controller` | `JointTrajectoryController` | left_arm_0 ~ left_arm_6 |
+| `torso_controller` | `JointTrajectoryController` | torso_0 ~ torso_5 |
+| `head_controller` | `JointTrajectoryController` | head_0, head_1 |
+| `gripper_r_controller` | `GripperActionController` | gripper_finger_r1_joint |
+| `gripper_l_controller` | `GripperActionController` | gripper_finger_l1_joint |
+| `both_arms_controller` | `JointTrajectoryController` | All arm joints (left + right) |
+| `body_controller` | `JointTrajectoryController` | Torso + Head + Both Arms |
+| `joint_state_broadcaster` | `JointStateBroadcaster` | All hardware joints |
+
+### 9-5. Known Issues
+
+#### ⚠️ Warning: `Missing gripper_finger_r2_joint` / `gripper_finger_l2_joint`
+
+```
+[WARN] The complete state of the robot is not yet known. Missing gripper_finger_r2_joint
+```
+
+**Cause**: `gripper_finger_r2_joint` and `gripper_finger_l2_joint` are **mimic joints** (linked to `r1`/`l1` via `<mimic>` in the URDF) and are not registered in `ros2_control`. The `joint_state_broadcaster` does not publish state for them, so MoveIt's planning scene monitor raises this warning.
+
+**Impact**: **None** — motion planning and execution for all controlled joints works correctly. This warning can be safely ignored.
+
+#### ⚠️ Hardware Control Handoff
+
+When `ros2 launch rby1_moveit_* demo.launch.py` is launched with real hardware, the `RBY1SystemHardware` plugin calls `/hardware_control state:=true` to take exclusive control from the driver. During this period, direct action commands sent to the driver (e.g. `robot_joint`) will be rejected. Control is returned to the driver when MoveIt is shut down (`Ctrl+C`).

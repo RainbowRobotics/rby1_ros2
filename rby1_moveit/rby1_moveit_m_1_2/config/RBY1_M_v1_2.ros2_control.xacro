@@ -2,7 +2,7 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
     <xacro:macro name="RBY1_M_v1_2_ros2_control" params="name initial_positions_file use_fake_hardware:=true robot_ip:=127.0.0.1:50051 model:=m">
         <xacro:property name="initial_positions" value="${xacro.load_yaml(initial_positions_file)['initial_positions']}"/>
-	<xacro:arg name="robot_ip" default="127.0.0.1:50051" />
+	      <xacro:arg name="robot_ip" default="127.0.0.1:50051" />
         <xacro:arg name="model" default="m" />
         <ros2_control name="${name}" type="system">
             <hardware>
@@ -145,6 +145,18 @@
                 <command_interface name="position"/>
                 <state_interface name="position">
                   <param name="initial_value">${initial_positions['head_1']}</param>
+                </state_interface>
+            </joint>
+            <joint name="gripper_finger_r1_joint">
+                <command_interface name="position"/>
+                <state_interface name="position">
+                  <param name="initial_value">${initial_positions['gripper_finger_r1_joint']}</param>
+                </state_interface>
+            </joint>
+            <joint name="gripper_finger_l1_joint">
+                <command_interface name="position"/>
+                <state_interface name="position">
+                  <param name="initial_value">${initial_positions['gripper_finger_l1_joint']}</param>
                 </state_interface>
             </joint>
 

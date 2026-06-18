@@ -2,6 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>rby1_driver</name>
+  <depend>rby1_msgs</depend>
   <version>0.0.0</version>
   <description>TODO: Package description</description>
   <maintainer email="sangmin.jeon@rainbow-robotics.com">rainbow</maintainer>
@@ -12,7 +13,7 @@
   <depend>rclcpp</depend>
   <depend>rclcpp_action</depend>
   <depend>control_msgs</depend>
-  <depend>rby1_msgs</depend>
+  
   <depend>sensor_msgs</depend>
   <depend>std_srvs</depend>
   <depend>trajectory_msgs</depend>

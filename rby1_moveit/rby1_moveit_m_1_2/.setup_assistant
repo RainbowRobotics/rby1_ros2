@@ -7,4 +7,17 @@ moveit_setup_assistant_config:
   package_settings:
     author_name: sangmin.jeon
     author_email: sangmin.jeon@rainbow-robotics.com
-    generated_timestamp: 1781687505
+    generated_timestamp: 1781755391
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+  modified_urdf:
+    xacros:
+      - control_xacro
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
