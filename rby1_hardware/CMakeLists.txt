@@ -5,6 +5,8 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+
+
 # Find PythonInterp policy warning suppression
 if(POLICY CMP0148)
   cmake_policy(SET CMP0148 OLD)
@@ -16,6 +18,9 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
+find_package(rby1_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 # SDK Path Resolution
 if(DEFINED ENV{RBY1_SDK_PATH})
@@ -35,6 +40,9 @@ include_directories(
 # Export plugins
 pluginlib_export_plugin_description_file(hardware_interface rby1_hardware.xml)
 
+set(CMAKE_INSTALL_RPATH "${RBY1_SDK_PATH}/build/src")
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+
 # Create hardware interface shared library
 add_library(rby1_hardware SHARED
   src/rby1_system_hardware.cpp
@@ -46,6 +54,9 @@ ament_target_dependencies(rby1_hardware
   rclcpp_lifecycle
   hardware_interface
   pluginlib
+  rby1_msgs
+  sensor_msgs
+  geometry_msgs
 )
 
 # Link SDK library
@@ -77,6 +88,9 @@ ament_export_dependencies(
   rclcpp_lifecycle
   hardware_interface
   pluginlib
+  rby1_msgs
+  sensor_msgs
+  geometry_msgs
 )
 
 ament_package()

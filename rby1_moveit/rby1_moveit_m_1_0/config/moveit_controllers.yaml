@@ -1,0 +1,105 @@
+# MoveIt uses this configuration for controller management
+
+moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
+
+moveit_simple_controller_manager:
+  controller_names:
+    - right_arm_controller
+    - left_arm_controller
+    - head_controller
+    - torso_controller
+    - gripper_r_controller
+    - gripper_l_controller
+
+  right_arm_controller:
+    type: FollowJointTrajectory
+    joints:
+      - right_arm_0
+      - right_arm_1
+      - right_arm_2
+      - right_arm_3
+      - right_arm_4
+      - right_arm_5
+      - right_arm_6
+    action_ns: follow_joint_trajectory
+  left_arm_controller:
+    type: FollowJointTrajectory
+    action_ns: follow_joint_trajectory
+    joints:
+      - left_arm_0
+      - left_arm_1
+      - left_arm_2
+      - left_arm_3
+      - left_arm_4
+      - left_arm_5
+      - left_arm_6
+  head_controller:
+    type: FollowJointTrajectory
+    action_ns: follow_joint_trajectory
+    joints:
+      - head_0
+      - head_1
+  torso_controller:
+    type: FollowJointTrajectory
+    action_ns: follow_joint_trajectory
+    joints:
+      - torso_0
+      - torso_1
+      - torso_2
+      - torso_3
+      - torso_4
+      - torso_5
+  both_arms_controller:
+    type: FollowJointTrajectory
+    action_ns: follow_joint_trajectory
+    joints:
+      - left_arm_0
+      - left_arm_1
+      - left_arm_2
+      - left_arm_3
+      - left_arm_4
+      - left_arm_5
+      - left_arm_6
+      - right_arm_0
+      - right_arm_1
+      - right_arm_2
+      - right_arm_3
+      - right_arm_4
+      - right_arm_5
+      - right_arm_6
+  body_controller:
+    type: FollowJointTrajectory
+    action_ns: follow_joint_trajectory
+    joints:
+      - torso_0
+      - torso_1
+      - torso_2
+      - torso_3
+      - torso_4
+      - torso_5
+      - head_0
+      - head_1
+      - left_arm_0
+      - left_arm_1
+      - left_arm_2
+      - left_arm_3
+      - left_arm_4
+      - left_arm_5
+      - left_arm_6
+      - right_arm_0
+      - right_arm_1
+      - right_arm_2
+      - right_arm_3
+      - right_arm_4
+      - right_arm_5
+      - right_arm_6
+  gripper_r_controller:
+    type: GripperCommand
+    joints:
+      - gripper_finger_r1_joint
+    action_ns: gripper_cmd
+  gripper_l_controller:
+    type: GripperCommand
+    joints:
+      - gripper_finger_l1_joint
+    action_ns: gripper_cmd

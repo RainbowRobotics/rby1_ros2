@@ -10,6 +10,10 @@
 #include "hardware_interface/types/hardware_interface_return_values.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/state.hpp"
+#include "sensor_msgs/msg/joint_state.hpp"
+#include "geometry_msgs/msg/twist.hpp"
+#include "rby1_msgs/srv/state_on_off.hpp"
+#include <mutex>
 
 #include "rby1-sdk/robot.h"
 #include "rby1-sdk/model.h"
@@ -43,7 +47,8 @@ public:
   virtual void get_joint_states(std::vector<double>& positions, std::vector<double>& velocities, std::vector<double>& torques) = 0;
   
   virtual bool init_stream() = 0;
-  virtual void send_stream_command(const std::vector<double>& target_positions) = 0;
+  virtual void send_stream_command(const std::vector<double>& target_positions, double vel_limit = -1.0, double acc_limit = -1.0) = 0;
+  virtual void send_mobility_command(double vx, double vy, double wz, double minimum_time) = 0;
   virtual void close_stream() = 0;
   
   virtual std::optional<std::string> get_predicted_collision_reason(const std::vector<double>& target_q, double threshold) = 0;
@@ -55,7 +60,8 @@ class RBY1RobotWrapperImpl : public RBY1RobotWrapper {
 private:
   std::shared_ptr<rb::Robot<ModelType>> robot_;
   rb::RobotInfo info_;
-  std::unique_ptr<rb::RobotCommandStreamHandler<ModelType>> stream_handler_;
+  std::unique_ptr<rb::RobotCommandStreamHandler<ModelType>> upper_body_stream_handler_;
+  std::unique_ptr<rb::RobotCommandStreamHandler<ModelType>> mobility_stream_handler_;
   
   // Dynamics for predictive collision check
   std::shared_ptr<rb::dyn::Robot<ModelType::kRobotDOF>> dynamics_;
@@ -141,12 +147,13 @@ public:
   bool init_stream() override {
     if (!robot_) return false;
     close_stream();
-    stream_handler_ = robot_->CreateCommandStream();
-    return stream_handler_ != nullptr;
+    upper_body_stream_handler_ = robot_->CreateCommandStream(10);
+    mobility_stream_handler_ = robot_->CreateCommandStream(10);
+    return upper_body_stream_handler_ != nullptr && mobility_stream_handler_ != nullptr;
   }
 
-  void send_stream_command(const std::vector<double>& target_positions) override {
-    if (!stream_handler_ || target_positions.size() < ModelType::kRobotDOF) return;
+  void send_stream_command(const std::vector<double>& target_positions, double vel_limit = -1.0, double acc_limit = -1.0) override {
+    if (!upper_body_stream_handler_ || target_positions.size() < ModelType::kRobotDOF) return;
     
     rb::TorsoCommandBuilder torso_builder;
     if (!info_.torso_joint_idx.empty()) {
@@ -154,7 +161,17 @@ public:
       for (size_t i = 0; i < info_.torso_joint_idx.size(); ++i) {
         torso_q[i] = target_positions[info_.torso_joint_idx[i]];
       }
-      torso_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(torso_q));
+      rb::JointPositionCommandBuilder cmd_builder;
+      cmd_builder.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(1e6))
+                 .SetPosition(torso_q)
+                 .SetMinimumTime(0.01);
+      if (vel_limit > 0.0) {
+        cmd_builder.SetVelocityLimit(Eigen::VectorXd::Constant(torso_q.size(), vel_limit));
+      }
+      if (acc_limit > 0.0) {
+        cmd_builder.SetAccelerationLimit(Eigen::VectorXd::Constant(torso_q.size(), acc_limit));
+      }
+      torso_builder.SetCommand(cmd_builder);
     }
     
     rb::ArmCommandBuilder right_arm_builder;
@@ -163,7 +180,17 @@ public:
       for (size_t i = 0; i < info_.right_arm_joint_idx.size(); ++i) {
         right_q[i] = target_positions[info_.right_arm_joint_idx[i]];
       }
-      right_arm_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(right_q));
+      rb::JointPositionCommandBuilder cmd_builder;
+      cmd_builder.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(1e6))
+                 .SetPosition(right_q)
+                 .SetMinimumTime(0.01);
+      if (vel_limit > 0.0) {
+        cmd_builder.SetVelocityLimit(Eigen::VectorXd::Constant(right_q.size(), vel_limit));
+      }
+      if (acc_limit > 0.0) {
+        cmd_builder.SetAccelerationLimit(Eigen::VectorXd::Constant(right_q.size(), acc_limit));
+      }
+      right_arm_builder.SetCommand(cmd_builder);
     }
     
     rb::ArmCommandBuilder left_arm_builder;
@@ -172,7 +199,17 @@ public:
       for (size_t i = 0; i < info_.left_arm_joint_idx.size(); ++i) {
         left_q[i] = target_positions[info_.left_arm_joint_idx[i]];
       }
-      left_arm_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(left_q));
+      rb::JointPositionCommandBuilder cmd_builder;
+      cmd_builder.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(1e6))
+                 .SetPosition(left_q)
+                 .SetMinimumTime(0.01);
+      if (vel_limit > 0.0) {
+        cmd_builder.SetVelocityLimit(Eigen::VectorXd::Constant(left_q.size(), vel_limit));
+      }
+      if (acc_limit > 0.0) {
+        cmd_builder.SetAccelerationLimit(Eigen::VectorXd::Constant(left_q.size(), acc_limit));
+      }
+      left_arm_builder.SetCommand(cmd_builder);
     }
     
     rb::HeadCommandBuilder head_builder;
@@ -181,7 +218,17 @@ public:
       for (size_t i = 0; i < info_.head_joint_idx.size(); ++i) {
         head_q[i] = target_positions[info_.head_joint_idx[i]];
       }
-      head_builder.SetCommand(rb::JointPositionCommandBuilder().SetPosition(head_q));
+      rb::JointPositionCommandBuilder cmd_builder;
+      cmd_builder.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(1e6))
+                 .SetPosition(head_q)
+                 .SetMinimumTime(0.01);
+      if (vel_limit > 0.0) {
+        cmd_builder.SetVelocityLimit(Eigen::VectorXd::Constant(head_q.size(), vel_limit));
+      }
+      if (acc_limit > 0.0) {
+        cmd_builder.SetAccelerationLimit(Eigen::VectorXd::Constant(head_q.size(), acc_limit));
+      }
+      head_builder.SetCommand(cmd_builder);
     }
     
     rb::BodyComponentBasedCommandBuilder body_comp_builder;
@@ -193,13 +240,38 @@ public:
     comp_builder.SetBodyCommand(rb::BodyCommandBuilder(std::move(body_comp_builder)));
     comp_builder.SetHeadCommand(head_builder);
     
-    stream_handler_->SendCommand(rb::RobotCommandBuilder().SetCommand(comp_builder));
+    upper_body_stream_handler_->SendCommand(rb::RobotCommandBuilder().SetCommand(comp_builder));
+  }
+
+  void send_mobility_command(double vx, double vy, double wz, double minimum_time) override {
+    if (!mobility_stream_handler_) return;
+    
+    Eigen::Vector2d linear_vel(vx, vy);
+    Eigen::Vector2d acceleration_limit(0.5, 0.5);
+    
+    rb::SE2VelocityCommandBuilder se2_cmd;
+    se2_cmd.SetCommandHeader(rb::CommandHeaderBuilder().SetControlHoldTime(1.0));
+    se2_cmd.SetMinimumTime(minimum_time);
+    se2_cmd.SetVelocity(linear_vel, wz);
+    se2_cmd.SetAccelerationLimit(acceleration_limit, 0.5);
+    
+    rb::MobilityCommandBuilder mobility_cmd;
+    mobility_cmd.SetCommand(se2_cmd);
+    
+    rb::ComponentBasedCommandBuilder comp_builder;
+    comp_builder.SetMobilityCommand(mobility_cmd);
+    
+    mobility_stream_handler_->SendCommand(rb::RobotCommandBuilder().SetCommand(comp_builder));
   }
 
   void close_stream() override {
-    if (stream_handler_) {
-      stream_handler_->Cancel();
-      stream_handler_.reset();
+    if (upper_body_stream_handler_) {
+      try { upper_body_stream_handler_->Cancel(); } catch (...) {}
+      upper_body_stream_handler_.reset();
+    }
+    if (mobility_stream_handler_) {
+      try { mobility_stream_handler_->Cancel(); } catch (...) {}
+      mobility_stream_handler_.reset();
     }
   }
 
@@ -251,7 +323,7 @@ public:
   hardware_interface::return_type read(const rclcpp::Time & time, const rclcpp::Duration & period) override;
   
   hardware_interface::return_type write(const rclcpp::Time & time, const rclcpp::Duration & period) override;
-
+ 
 private:
   std::unique_ptr<RBY1RobotWrapper> robot_;
   std::string robot_ip_;
@@ -266,6 +338,32 @@ private:
   
   // Mapping from URDF joint index to SDK index
   std::vector<unsigned int> joint_name_to_sdk_index_;
+
+  // ROS 2 node, subscribers, and service client
+  std::shared_ptr<rclcpp::Node> node_;
+  rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
+  rclcpp::Client<rby1_msgs::srv::StateOnOff>::SharedPtr hardware_control_client_;
+  rclcpp::Client<rby1_msgs::srv::StateOnOff>::SharedPtr power_control_client_;
+  rclcpp::Client<rby1_msgs::srv::StateOnOff>::SharedPtr servo_control_client_;
+
+  double velocity_limit_{4.712388};
+  double acceleration_limit_{1.0};
+
+  // Joint index classification by prefix
+  std::vector<unsigned int> torso_joint_indices_;
+  std::vector<unsigned int> right_arm_joint_indices_;
+  std::vector<unsigned int> left_arm_joint_indices_;
+  std::vector<unsigned int> head_joint_indices_;
+
+  // Cached states for read/write thread-safe exchange
+  std::mutex state_mutex_;
+  sensor_msgs::msg::JointState::SharedPtr latest_joint_state_;
+  geometry_msgs::msg::Twist::SharedPtr latest_twist_;
+  rclcpp::Time cmd_vel_recv_time_;
+
+  void joint_state_callback(const sensor_msgs::msg::JointState::SharedPtr msg);
+  void cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg);
 };
 
 } // namespace rby1_hardware

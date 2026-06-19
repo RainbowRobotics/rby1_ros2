@@ -1,39 +1,102 @@
 #!/usr/bin/env python3
 """
-Stream Command Example (Normal Stream Mode)
-===========================================
-Demonstrates normal stream mode behavior. Updates arms joint positions,
-queries and moves end-effector Cartesian poses, demonstrates goal preemption,
-and safe return to Zero Pose.
+Stream Command Example
+======================
+Demonstrates concurrent dual stream control. Activates stream control,
+streams torso, arms, and head joint positions via StreamJoint action,
+and concurrently publishes velocity commands to /cmd_vel to move the mobile base.
 
 Run:
   ros2 run rby1_examples 13_stream_command
 """
 import time
-import copy
+import math
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
-from rby1_msgs.action import Rby1CartesianCommand, Rby1JointCommand
-from rby1_msgs.msg import JointCommand, RobotState, CartesianCommand
-from rby1_msgs.srv import StateOnOff, GetCartesianPose
+from rby1_msgs.action import Rby1JointCommand, StreamJoint
+from rby1_msgs.msg import JointCommand, RobotState, StreamJointCommand
+from rby1_msgs.srv import StateOnOff
+from geometry_msgs.msg import Twist
 
 class StreamCommand(Node):
     def __init__(self):
         super().__init__('stream_command')
-        self.stream_hz = 15.0
+        self.stream_hz = 30.0
+        
+        # ROS 2 publishers, clients and action clients
+        self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
         self.joint_client = ActionClient(self, Rby1JointCommand, 'robot_joint')
-        self.cartesian_client = ActionClient(self, Rby1CartesianCommand, 'robot_cartesian')
+        self.stream_joint_client = ActionClient(self, StreamJoint, 'stream_joint')
+        
         self.power_client = self.create_client(StateOnOff, 'robot_power')
         self.servo_client = self.create_client(StateOnOff, 'robot_servo')
         self.stream_control_client = self.create_client(StateOnOff, 'stream_control')
-        self.get_pose_client = self.create_client(GetCartesianPose, 'get_cartesian_pose')
         
         self.state_sub = self.create_subscription(RobotState, 'robot_state', self.state_callback, 10)
         self.control_state = None
+        self.robot_stream_state = None
+        self.mb_running = False
+        self.mb_thread = None
+
+        # Build joint ready/zero pose values
+        self.zero_torso = [0.0] * 6
+        self.zero_right = [0.0] * 7
+        self.zero_left  = [0.0] * 7
+        self.zero_head  = [0.0] * 2
+
+        self.ready_torso = [0.0] * 6
+        self.ready_right = [0.0, -0.5, 0.0, -1.0, 0.0, 0.0, 0.0]
+        self.ready_left  = [0.0, 0.5, 0.0, -1.0, 0.0, 0.0, 0.0]
+        self.ready_head  = [0.0, 0.0]
 
     def state_callback(self, msg):
         self.control_state = msg.control_manager_state
+        self.robot_stream_state = msg.robot_stream_state
+
+    def start_mobile_base_thread(self):
+        import threading
+        self.mb_running = True
+        self.mb_thread = threading.Thread(target=self.mobile_base_loop)
+        self.mb_thread.daemon = True
+        self.mb_thread.start()
+        self.get_logger().info("Mobile base background thread started.")
+
+    def stop_mobile_base_thread(self):
+        self.mb_running = False
+        if self.mb_thread is not None:
+            self.mb_thread.join(timeout=1.0)
+            self.mb_thread = None
+        # Publish final stop command
+        stop_twist = Twist()
+        self.cmd_vel_pub.publish(stop_twist)
+        self.get_logger().info("Mobile base background thread stopped.")
+
+    def mobile_base_loop(self):
+        # Move back and forth in 5-second cycles:
+        # 0.0 - 1.5s: Forward (0.15 m/s)
+        # 1.5 - 2.5s: Stop (0.0 m/s)
+        # 2.5 - 4.0s: Backward (-0.15 m/s)
+        # 4.0 - 5.0s: Stop (0.0 m/s)
+        hz = 10.0
+        dt = 1.0 / hz
+        start_time = self.get_clock().now()
+        while rclpy.ok() and self.mb_running:
+            elapsed = (self.get_clock().now() - start_time).nanoseconds / 1e9
+            relative_t = elapsed % 5.0
+            
+            twist_msg = Twist()
+            if relative_t < 1.5:
+                twist_msg.linear.x = 0.15
+            elif 1.5 <= relative_t < 2.5:
+                twist_msg.linear.x = 0.0
+            elif 2.5 <= relative_t < 4.0:
+                twist_msg.linear.x = -0.15
+            else:
+                twist_msg.linear.x = 0.0
+                
+            self.cmd_vel_pub.publish(twist_msg)
+            time.sleep(dt)
 
     def wait_for_state(self, target_states, timeout=5.0):
         start_time = self.get_clock().now()
@@ -52,6 +115,29 @@ class StreamCommand(Node):
             if elapsed >= duration:
                 break
             rclpy.spin_once(self, timeout_sec=0.01)
+
+    def send_joint_stream(self, torso_pos, right_pos, left_pos, head_pos, dt):
+        goal_msg = StreamJoint.Goal()
+        cmd = StreamJointCommand()
+        
+        cmd.torso = JointCommand()
+        cmd.torso.position = torso_pos
+        cmd.torso.minimum_time = dt
+        
+        cmd.right_arm = JointCommand()
+        cmd.right_arm.position = right_pos
+        cmd.right_arm.minimum_time = dt
+        
+        cmd.left_arm = JointCommand()
+        cmd.left_arm.position = left_pos
+        cmd.left_arm.minimum_time = dt
+        
+        cmd.head = JointCommand()
+        cmd.head.position = head_pos
+        cmd.head.minimum_time = dt
+        
+        goal_msg.command = cmd
+        self.stream_joint_client.send_goal_async(goal_msg)
 
     def ensure_robot_ready(self):
         self.get_logger().info('Ensuring robot is powered on and servos are active...')
@@ -121,14 +207,13 @@ class StreamCommand(Node):
                 self.get_logger().error(f'Zero Pose failed with code: {result.finish_code}')
         return False
 
-    def toggle_stream(self, enable: bool, mode: str = "normal") -> bool:
+    def toggle_stream(self, enable: bool) -> bool:
         if not rclpy.ok():
             return False
         try:
             req = StateOnOff.Request()
             req.state = enable
-            req.parameters = mode
-            self.get_logger().info(f"Calling stream_control: state={enable}, mode={mode}...")
+            self.get_logger().info(f"Calling stream_control: state={enable}...")
             self.stream_control_client.wait_for_service(timeout_sec=1.0)
             future = self.stream_control_client.call_async(req)
             rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
@@ -145,15 +230,6 @@ class StreamCommand(Node):
             print(f"Exception during stream control toggle: {e}")
         return False
 
-    def get_cartesian_pose(self, ref_link, target_link):
-        req = GetCartesianPose.Request()
-        req.ref_link = ref_link
-        req.target_link = target_link
-        self.get_pose_client.wait_for_service()
-        future = self.get_pose_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future)
-        return future.result().transform
-
 def main(args=None):
     from rclpy.signals import SignalHandlerOptions
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
@@ -169,152 +245,94 @@ def main(args=None):
         node.get_logger().error('Failed to establish zero pose.')
         return
 
-    # 2. Enable Persistent Command Stream in normal mode
-    if not node.toggle_stream(True, mode="normal"):
-        node.get_logger().error('Failed to enable command stream. Exiting.')
+    # 2. Enable Persistent Command Streams (both upper-body and mobility)
+    if not node.toggle_stream(True):
+        node.get_logger().error('Failed to enable streams. Exiting.')
         return
 
+    # Wait a brief moment to flush any old state messages, then initialize the flag to True
+    node.spin_sleep(0.2)
+    node.robot_stream_state = True
+
+    node.stream_joint_client.wait_for_server()
+
     try:
-        # Step 1: Move both arms to Ready Pose using Joint control
-        node.get_logger().info('\n==========================================')
-        node.get_logger().info(' Step 1: Moving Arms to Ready Pose (Joint Command, 3.0s)')
-        node.get_logger().info('==========================================')
-        
-        goal_msg = Rby1JointCommand.Goal()
-        # Right Arm Ready
-        goal_msg.right_arm = JointCommand()
-        goal_msg.right_arm.position = [0.0, -0.5, 0.0, -1.0, 0.0, 0.0, 0.0]
-        goal_msg.right_arm.minimum_time = 3.0
-        # Left Arm Ready
-        goal_msg.left_arm = JointCommand()
-        goal_msg.left_arm.position = [0.0, 0.5, 0.0, -1.0, 0.0, 0.0, 0.0]
-        goal_msg.left_arm.minimum_time = 3.0
-        goal_msg.priority = 10
-        
-        node.get_logger().info('Sending Joint Goal...')
-        node.joint_client.wait_for_server()
-        future = node.joint_client.send_goal_async(goal_msg)
-        rclpy.spin_until_future_complete(node, future)
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            node.get_logger().error('Joint command rejected.')
-            return
-        
-        get_res_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(node, get_res_future)
-        node.get_logger().info('Ready Pose reached.')
-        node.spin_sleep(1.0)
+        # Start mobile base background thread
+        node.start_mobile_base_thread()
 
-        # Step 2: Move Z-axis UP using Cartesian control (refer to example 8)
-        node.get_logger().info('\n==========================================')
-        node.get_logger().info(' Step 2: Moving Z-axis UP (Cartesian Command, 3.0s)')
-        node.get_logger().info('==========================================')
-        
-        # Query current Cartesian poses
-        ready_right_trans = node.get_cartesian_pose("link_torso_5", "link_right_arm_6")
-        ready_left_trans = node.get_cartesian_pose("link_torso_5", "link_left_arm_6")
-        node.get_logger().info(f"ready_right_trans: {ready_right_trans}")
-        node.get_logger().info(f"ready_left_trans: {ready_left_trans}")
+        node.get_logger().info('Starting continuous whole-body stream execution loop.')
+        dt = 1.0 / node.stream_hz
+        cycle = 0
 
-        # Define Z-up target (Z + 0.05m)
-        up_right_trans = copy.deepcopy(ready_right_trans)
-        up_right_trans.translation.z += 0.05
-        up_left_trans = copy.deepcopy(ready_left_trans)
-        up_left_trans.translation.z += 0.05
+        while rclpy.ok():
+            if node.robot_stream_state is False:
+                node.get_logger().error("Stream has been deactivated by the driver. Exiting loop.")
+                break
 
-        cart_goal_msg = Rby1CartesianCommand.Goal()
-        # Right Arm UP
-        cart_goal_msg.right_arm = CartesianCommand()
-        cart_goal_msg.right_arm.ref_link = "link_torso_5"
-        cart_goal_msg.right_arm.target_link = "link_right_arm_6"
-        cart_goal_msg.right_arm.transform = up_right_trans
-        cart_goal_msg.right_arm.minimum_time = 3.0
-        
-        # Left Arm UP
-        cart_goal_msg.left_arm = CartesianCommand()
-        cart_goal_msg.left_arm.ref_link = "link_torso_5"
-        cart_goal_msg.left_arm.target_link = "link_left_arm_6"
-        cart_goal_msg.left_arm.transform = up_left_trans
-        cart_goal_msg.left_arm.minimum_time = 3.0
-        
-        node.get_logger().info('Sending Cartesian Goal (UP)...')
-        node.cartesian_client.wait_for_server()
-        future = node.cartesian_client.send_goal_async(cart_goal_msg)
-        rclpy.spin_until_future_complete(node, future)
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            node.get_logger().error('Cartesian command (UP) rejected.')
-            return
-        
-        get_res_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(node, get_res_future)
-        node.get_logger().info('Cartesian UP complete.')
-        node.spin_sleep(1.0)
+            cycle += 1
+            if cycle > 3:
+                break
+            node.get_logger().info(f'\n==========================================')
+            node.get_logger().info(f' Cycle {cycle} - Step 1: Zero Pose -> Ready Pose (3.0s)')
+            node.get_logger().info(f'==========================================')
 
-        # Step 3: Move Z-axis BACK DOWN to Ready Pose, then preempt and return to Zero Pose
-        node.get_logger().info('\n==========================================')
-        node.get_logger().info(' Step 3: Moving Z-axis DOWN and Preempting to Zero Pose')
-        node.get_logger().info('==========================================')
-        
-        cart_goal_msg_down = Rby1CartesianCommand.Goal()
-        # Right Arm DOWN to ready_right_trans
-        cart_goal_msg_down.right_arm = CartesianCommand()
-        cart_goal_msg_down.right_arm.ref_link = "link_torso_5"
-        cart_goal_msg_down.right_arm.target_link = "link_right_arm_6"
-        cart_goal_msg_down.right_arm.transform = ready_right_trans
-        cart_goal_msg_down.right_arm.minimum_time = 5.0
-        
-        # Left Arm DOWN to ready_left_trans
-        cart_goal_msg_down.left_arm = CartesianCommand()
-        cart_goal_msg_down.left_arm.ref_link = "link_torso_5"
-        cart_goal_msg_down.left_arm.target_link = "link_left_arm_6"
-        cart_goal_msg_down.left_arm.transform = ready_left_trans
-        cart_goal_msg_down.left_arm.minimum_time = 5.0
+            # Zero -> Ready
+            duration = 3.0
+            num_points = int(duration * node.stream_hz)
+            for i in range(1, num_points + 1):
+                if node.robot_stream_state is False or not rclpy.ok():
+                    break
+                ratio = i / num_points
+                curr_torso = [s + (t - s) * ratio for s, t in zip(node.zero_torso, node.ready_torso)]
+                curr_right = [s + (t - s) * ratio for s, t in zip(node.zero_right, node.ready_right)]
+                curr_left = [s + (t - s) * ratio for s, t in zip(node.zero_left, node.ready_left)]
+                curr_head = [s + (t - s) * ratio for s, t in zip(node.zero_head, node.ready_head)]
+                
+                node.send_joint_stream(curr_torso, curr_right, curr_left, curr_head, dt)
+                node.spin_sleep(dt)
 
-        node.get_logger().info('Sending Cartesian Goal (DOWN)...')
-        future = node.cartesian_client.send_goal_async(cart_goal_msg_down)
-        rclpy.spin_until_future_complete(node, future)
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            node.get_logger().error('Cartesian command (DOWN) rejected.')
-            return
+            # Ready Pose Hold
+            node.get_logger().info(f' Cycle {cycle} - Step 2: Holding Ready Pose (1.0s)')
+            duration = 1.0
+            num_points = int(duration * node.stream_hz)
+            for i in range(1, num_points + 1):
+                if node.robot_stream_state is False or not rclpy.ok():
+                    break
+                node.send_joint_stream(node.ready_torso, node.ready_right, node.ready_left, node.ready_head, dt)
+                node.spin_sleep(dt)
 
-        # Let it move for 1.5 seconds, then preempt/cancel it
-        node.get_logger().info('Moving relative down... Preempting in 1.5 seconds...')
-        node.spin_sleep(1.5)
-        
-        node.get_logger().info('Preempting Cartesian Goal...')
-        cancel_future = goal_handle.cancel_goal_async()
-        rclpy.spin_until_future_complete(node, cancel_future)
-        node.get_logger().info('Cartesian Goal canceled.')
-        
-        node.spin_sleep(0.5)
+            # Ready -> Zero
+            node.get_logger().info(f' Cycle {cycle} - Step 3: Ready Pose -> Zero Pose (3.0s)')
+            duration = 3.0
+            num_points = int(duration * node.stream_hz)
+            for i in range(1, num_points + 1):
+                if node.robot_stream_state is False or not rclpy.ok():
+                    break
+                ratio = i / num_points
+                curr_torso = [s + (t - s) * ratio for s, t in zip(node.ready_torso, node.zero_torso)]
+                curr_right = [s + (t - s) * ratio for s, t in zip(node.ready_right, node.zero_right)]
+                curr_left = [s + (t - s) * ratio for s, t in zip(node.ready_left, node.zero_left)]
+                curr_head = [s + (t - s) * ratio for s, t in zip(node.ready_head, node.zero_head)]
+                
+                node.send_joint_stream(curr_torso, curr_right, curr_left, curr_head, dt)
+                node.spin_sleep(dt)
 
-        # Move to Zero Pose via Joint control
-        node.get_logger().info('Sending Joint Goal to return to Zero Pose (3.0s)...')
-        zero_goal_msg = Rby1JointCommand.Goal()
-        zero_goal_msg.right_arm = JointCommand()
-        zero_goal_msg.right_arm.position = [0.0] * 7
-        zero_goal_msg.right_arm.minimum_time = 3.0
-        zero_goal_msg.left_arm = JointCommand()
-        zero_goal_msg.left_arm.position = [0.0] * 7
-        zero_goal_msg.left_arm.minimum_time = 3.0
-        
-        future = node.joint_client.send_goal_async(zero_goal_msg)
-        rclpy.spin_until_future_complete(node, future)
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            node.get_logger().error('Zero pose joint goal rejected.')
-            return
-        
-        get_res_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(node, get_res_future)
-        node.get_logger().info('Returned to Zero Pose successfully.')
+            # Zero Pose Hold
+            node.get_logger().info(f' Cycle {cycle} - Step 4: Holding Zero Pose (1.0s)')
+            duration = 1.0
+            num_points = int(duration * node.stream_hz)
+            for i in range(1, num_points + 1):
+                if node.robot_stream_state is False or not rclpy.ok():
+                    break
+                node.send_joint_stream(node.zero_torso, node.zero_right, node.zero_left, node.zero_head, dt)
+                node.spin_sleep(dt)
 
     except KeyboardInterrupt:
         node.get_logger().info('KeyboardInterrupt received. Shutting down...')
     finally:
-        # 4. Safely deactivate stream on exit
+        # Stop background thread
+        node.stop_mobile_base_thread()
+        # Deactivate stream on exit
         if rclpy.ok():
             node.get_logger().info('Cleaning up: Deactivating stream control...')
             node.toggle_stream(False)

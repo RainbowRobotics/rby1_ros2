@@ -3,8 +3,6 @@
 > [!CAUTION]
 > ## The current driver is in beta. For safe use, please test the features in a simulation first.
 > Please note that package contents, APIs, topics, and parameters may change continuously during the beta period.
-> ## The moveit and hardware packages are currently under development. 
-> Please note that they are not available for use.
 
 ## Overview
 
@@ -33,7 +31,20 @@ It wraps the RBY1 C++ SDK into a ROS 2 node, providing state monitoring and mult
 
 <https://hub.docker.com/r/rainbowroboticsofficial/rby1-sim>
 
-### 1-4. Environment Setup
+### 1-4. Install MoveIt 2
+
+- Please proceed up to  `~ Optional: add the previous command to your .bashrc`
+
+<https://moveit.picknik.ai/humble/doc/tutorials/getting_started/getting_started.html>
+
+- Install additional tool
+
+```bash
+sudo apt install ros-humble-gripper-controllers
+sudo apt install ros-humble-joint-trajectory-controller
+```
+
+### 1-5. Environment Setup
 
 Add the following lines to `~/.bashrc`:
 
@@ -69,23 +80,13 @@ Because the workspace was built with `--symlink-install`, **no rebuild is needed
 > For simulation testing, keep `robot_ip: "127.0.0.1:50051"`.  
 > Some state values (battery, tool flange FT/IMU) will show zeros in simulation because no physical sensors are attached.
 
+- Main Parameters(for the detail of driver_parameters.yaml, see [here](#50-configdriver_parametersyaml))
+
 | Parameter | Default | Unit | Description |
 |-----------|---------|------|-------------|
 | `robot_ip` | `"127.0.0.1:50051"` | - | Robot IP address and gRPC port |
 | `model` | `"m"` | - | Robot model — `"a"` (RBY1-A) or `"m"` (RBY1-M) |
 | `get_state_period` | `0.01` | s | State publish interval — default 100 Hz |
-| `minimum_time` | `2.0` | s | Default minimum execution time for motion commands |
-| `angular_velocity_limit` | `4.712` | rad/s | Joint angular velocity limit |
-| `linear_velocity_limit` | `1.5` | m/s | Cartesian linear velocity limit |
-| `acceleration_limit` | `1.0` | - | Acceleration scaling factor |
-| `se2_minimum_time` | `1.0` | s | Minimum execution time (interpolation ramp) for SE2 velocity commands |
-| `se2_linear_acceleration_limit` | `0.5` | m/s² | Linear acceleration limit for SE2 velocity commands |
-| `se2_angular_acceleration_limit` | `0.5` | rad/s² | Angular acceleration limit for SE2 velocity commands |
-| `fault_reset_trigger` | `true` | - | Auto-reset MAJOR/MINOR fault on driver startup |
-| `node_power_off_trigger` | `false` | - | Power off robot automatically when driver node exits |
-| `collision_recovery_enable` | `false` | - | Enable automatic retreat to initial pose on collision detection |
-| `Pre_collision_detection_enable` | `false` | - | Enable predictive collision checking before executing any motion command |
-| `collision_threshold` | `0.01` | m | Minimum link-distance threshold for collision detection (always active) |
 | `publish_battery_state` | `true` | - | Enable battery state topic |
 | `publish_tool_flange_state` | `true` | - | Enable tool flange state topics (left + right) |
 
@@ -96,8 +97,6 @@ Because the workspace was built with `--symlink-install`, **no rebuild is needed
 > `get_state_period` sets the interval (in seconds) at which the driver reads the robot state via `GetState()` and publishes all state topics.  
 > For example, `0.01 s` → approximately **100 Hz** publishing rate.  
 > Actual throughput may be slightly lower (97–100 Hz) depending on PC environment and CPU load.
->
-> This period also directly affects **predictive collision checking** (`Pre_collision_detection_enable`): the driver evaluates whether a commanded target pose would cause a collision at this same rate. If `get_state_period` is slow (e.g. `0.1 s`), collision pre-checks will also be evaluated at 10 Hz, potentially allowing a collision-bound command to slip through before the check fires.
 
 ![get_state_period_1](Doc/img/topic_hz.png)
 
@@ -157,8 +156,7 @@ ros2 run rby1_examples <example_name>
 | `11_cancel_control` | `ros2 run rby1_examples 11_cancel_control` | Demonstrates action cancel and `cancel_control` service |
 | `12_mobile_base_control` | `ros2 run rby1_examples 12_mobile_base_control` | Drives the mobile base via `cmd_vel`|
 | `13_stream_command` | `ros2 run rby1_examples 13_stream_command` | Alternates Zero/Ready poses using regular joint commands over persistent stream with varying wait intervals |
-| `14_whole_body_stream` | `ros2 run rby1_examples 14_whole_body_stream` | Commands all 5 body(mobile, torso, right_arm,left_arm, head) parts in stream with varying wait intervals |
-| `15_collision_safety_control` | `ros2 run rby1_examples 15_collision_safety_control` | use collision value in robot.state, Demonstrates that when collision happens, robot automatically moves retreat to initial safe pose.  |
+| `14_collision_safety_control` | `ros2 run rby1_examples 14_collision_safety_control` | use collision value in robot.state, Demonstrates that when collision happens, robot automatically moves retreat to initial safe pose.  |
 
 ---
 
@@ -208,7 +206,104 @@ ros2 launch rby1_description rby1_state_publisher.launch.py model:=a version:=1_
 
 ---
 
-## 3. Troubleshooting & Known Issues
+## 3. RB-Y1 MoveIt 2 (`rby1_hardware` + `rby1_moveit_*`)
+
+The `rby1_hardware` package provides a `ros2_control` `SystemInterface` plugin (`rby1_hardware/RBY1SystemHardware`) that bridges the RBY1 SDK to MoveIt 2 via the standard `ros2_control` pipeline.  
+Each `rby1_moveit_*` package contains the complete MoveIt 2 configuration (SRDF, kinematics, joint limits, controller configs) for a specific model and firmware version.
+
+![rby1_moveit_gui](Doc/img/moveit_gui.png)
+
+### 3-1. Available MoveIt Packages
+
+| Package | Model | Firmware |
+|---------|-------|---------|
+| `rby1_moveit_a_1_0` | RBY1-A | v1.0 |
+| `rby1_moveit_a_1_1` | RBY1-A | v1.1 |
+| `rby1_moveit_a_1_2` | RBY1-A | v1.2 |
+| `rby1_moveit_m_1_0` | RBY1-M | v1.0 |
+| `rby1_moveit_m_1_1` | RBY1-M | v1.1 |
+| `rby1_moveit_m_1_2` | RBY1-M | v1.2 |
+| `rby1_moveit_m_1_3` | RBY1-M | v1.3 |
+
+### 3-2. Launch MoveIt with Real Hardware
+
+> [!IMPORTANT]
+> **Real hardware mode** requires `rby1_driver` to be running first.  
+> `RBY1SystemHardware` claims hardware control from the driver via the `/hardware_control` service on activation.
+> Please check robot ip & model in `rby1_driver/config/driver_parameters.yaml`
+>
+> [!WARNING]
+> **Version mismatch risk**: The `rby1_hardware` plugin cannot verify the connected robot's firmware version at runtime.  
+> If the `rby1_moveit_*` package version does not match the actual robot firmware version, MoveIt and the robot may be activated with different joint/kinematic configurations, which could cause unexpected commands to be sent to the robot.  
+> **Always ensure the `rby1_moveit_*` package version matches the robot's firmware version before launching with real hardware.**
+
+**Step 1** — Start the driver (first terminal):
+
+```bash
+source install/setup.bash
+ros2 launch rby1_driver rby1_ros2_driver.launch.py
+```
+
+**Step 2** — Launch MoveIt (second terminal), selecting the package that matches your model and firmware version:
+
+```bash
+# open another terminal
+source install/setup.bash
+
+# Real hardware (default: use_fake_hardware:=false)
+ros2 launch rby1_moveit_m_1_2 demo.launch.py
+
+# With a custom robot IP
+ros2 launch rby1_moveit_m_1_2 demo.launch.py robot_ip:=192.168.30.1:50051
+
+# Fake hardware / simulation (no real robot required)
+ros2 launch rby1_moveit_m_1_2 demo.launch.py use_fake_hardware:=true
+```
+
+Replace `rby1_moveit_m_1_2` with the package matching your robot.
+
+### 3-3. Launch Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `use_fake_hardware` | `false` | `true` = `mock_components/GenericSystem` (no robot needed); `false` = `RBY1SystemHardware` (real robot) |
+| `robot_ip` | `127.0.0.1:50051` | RBY1 SDK gRPC address and port |
+| `model` | `m` or `a` | Robot model type passed to the hardware plugin |
+
+### 3-4. ros2_control Controllers
+
+Each MoveIt package spawns the following controllers:
+
+| Controller | Type | Controlled Joints |
+|------------|------|------------------|
+| `right_arm_controller` | `JointTrajectoryController` | right_arm_0 ~ ee_right |
+| `left_arm_controller` | `JointTrajectoryController` | left_arm_0 ~ ee_left |
+| `torso_controller` | `JointTrajectoryController` | base ~ torso_5 |
+| `head_controller` | `JointTrajectoryController` | head_0, head_1 |
+| `gripper_r_controller` | `GripperActionController` | gripper_finger_r1_joint |
+| `gripper_l_controller` | `GripperActionController` | gripper_finger_l1_joint |
+| `both_arms_controller` | `JointTrajectoryController` | All arm joints (left + right) |
+| `body_controller` | `JointTrajectoryController` | Torso + Head + Both Arms |
+| `joint_state_broadcaster` | `JointStateBroadcaster` | All hardware joints |
+
+
+## 4. Troubleshooting & Known Issues
+
+### Issue: MoveIt Known Issues (MoveIt 관련 알려진 문제)
+
+#### ⚠️ Warning: `Missing gripper_finger_r2_joint` / `gripper_finger_l2_joint`
+
+```
+[WARN] The complete state of the robot is not yet known. Missing gripper_finger_r2_joint
+```
+
+**Cause**: `gripper_finger_r2_joint` and `gripper_finger_l2_joint` are **mimic joints** (linked to `r1`/`l1` via `<mimic>` in the URDF) and are not registered in `ros2_control`. The `joint_state_broadcaster` does not publish state for them, so MoveIt's planning scene monitor raises this warning.
+
+**Impact**: **None** — motion planning and execution for all controlled joints works correctly. This warning can be safely ignored.
+
+#### ⚠️ Hardware Control Handoff
+
+When `ros2 launch rby1_moveit_* demo.launch.py` is launched with real hardware, the `RBY1SystemHardware` plugin calls `/hardware_control state:=true` to take exclusive control from the driver. During this period, direct action commands sent to the driver (e.g. `robot_joint`) will be rejected. Control is returned to the driver when MoveIt is shut down (`Ctrl+C`).
 
 ### Issue: Control Commands Rejected After Trajectory Stream Interruptions (스트림 제어 노드 급작 종료 시 제어 불가 현상)
 
@@ -288,21 +383,37 @@ ros2 launch rby1_description rby1_state_publisher.launch.py model:=a version:=1_
 #### Always-On Collision Detection
 Self-collision monitoring is **always active** regardless of any parameter settings. The driver monitors link distances reported by the SDK on every state read cycle (`get_state_period`). When the minimum link distance falls below `collision_threshold`, the driver immediately calls `CancelControl()` and closes the stream.
 
-#### Predictive Collision Checking (`Pre_collision_detection_enable`)
-When enabled in `driver_parameters.yaml`, the driver checks the **target pose** for collisions *before* executing any joint or Cartesian command:
+#### Predictive Collision Checking
+The driver checks the **target pose** for collisions *before* executing any joint or Cartesian command:
 - **Joint commands**: uses the URDF-based dynamics model to evaluate the target joint configuration for link collisions.
 - **Cartesian commands**: solves the Inverse Kinematics via the built-in optimal control solver to obtain joint angles, then evaluates those angles for collisions.
-- If the predicted configuration exceeds the threshold, the command is **rejected before execution**.
-- ⚠️ This check runs at the same rate as `get_state_period`. A slow period means the check fires less frequently, potentially delaying rejection of a collision-bound command.
-
-#### Collision Recovery (`collision_recovery_enable`)
-When enabled, the driver automatically retreats to the initial pose when a collision is detected at runtime:
-- Cannot be active simultaneously with `Pre_collision_detection_enable` (predictive check prevents collisions from occurring in the first place, so recovery is not triggered).
-- Can be toggled at runtime via the `set_collision_safety` service.
+- If the predicted configuration is in collision (minimum distance below the threshold), the driver prints a warning log (`RCLCPP_WARN`) rather than aborting or rejecting the command, allowing safer manual intervention.
+- ⚠️ This check runs at the same rate as `get_state_period`. A slow period means the check fires less frequently.
 
 ---
 
 ## 5. Package Structure & Architecture
+
+### 5-0. Config/driver_parameters.yaml
+
+| Parameter | Default | Unit | Description |
+|-----------|---------|------|-------------|
+| `robot_ip` | `"127.0.0.1:50051"` | - | Robot IP address and gRPC port |
+| `model` | `"m"` | - | Robot model — `"a"` (RBY1-A) or `"m"` (RBY1-M) |
+| `get_state_period` | `0.01` | s | State publish interval — default 100 Hz |
+| `minimum_time` | `2.0` | s | Default minimum execution time for motion commands |
+| `angular_velocity_limit` | `4.712` | rad/s | Joint angular velocity limit |
+| `linear_velocity_limit` | `1.5` | m/s | Cartesian linear velocity limit |
+| `acceleration_limit` | `1.0` | - | Acceleration scaling factor |
+| `se2_minimum_time` | `1.0` | s | Minimum execution time (interpolation ramp) for SE2 velocity commands |
+| `se2_linear_acceleration_limit` | `0.5` | m/s² | Linear acceleration limit for SE2 velocity commands |
+| `se2_angular_acceleration_limit` | `0.5` | rad/s² | Angular acceleration limit for SE2 velocity commands |
+| `fault_reset_trigger` | `true` | - | Auto-reset MAJOR/MINOR fault on driver startup |
+| `collision_threshold` | `0.01` | m | Minimum link-distance threshold for collision detection (always active) |
+| `publish_battery_state` | `true` | - | Enable battery state topic |
+| `publish_tool_flange_state` | `true` | - | Enable tool flange state topics (left + right) |
+
+---
 
 ### 5-1. Package Structure
 
@@ -312,6 +423,14 @@ When enabled, the driver automatically retreats to the initial pose when a colli
 | `rby1_msgs` | Custom message, service, and action definitions for robot control and state. |
 | `rby1_examples` | Python example scripts demonstrating all major driver features. |
 | `rby1_description` | Robot description for ROS, demonstrating URDF and Mesh files, and simple visualization launch file. |
+| `rby1_hardware` | `ros2_control` SystemInterface plugin (`RBY1SystemHardware`). Bridges the RBY1 SDK to MoveIt 2 via the standard `ros2_control` hardware interface pipeline. |
+| `rby1_moveit_a_1_0` | MoveIt 2 configuration package for **Model A v1.0** (SRDF, controllers, kinematics, joint limits). |
+| `rby1_moveit_a_1_1` | MoveIt 2 configuration package for **Model A v1.1**. |
+| `rby1_moveit_a_1_2` | MoveIt 2 configuration package for **Model A v1.2**. |
+| `rby1_moveit_m_1_0` | MoveIt 2 configuration package for **Model M v1.0**. |
+| `rby1_moveit_m_1_1` | MoveIt 2 configuration package for **Model M v1.1**. |
+| `rby1_moveit_m_1_2` | MoveIt 2 configuration package for **Model M v1.2**. |
+| `rby1_moveit_m_1_3` | MoveIt 2 configuration package for **Model M v1.3**. |
 
 ### 5-2. System Architecture
 
@@ -344,8 +463,7 @@ When enabled, the driver automatically retreats to the initial pose when a colli
 - **Action Executors**: Each action goal is translated into an SDK `CommandBuilder` command and executed synchronously. Minor faults during execution trigger automatic reset and recovery.
 - **Safety Guard**: All motion commands are rejected unless the Control Manager is in `ENABLE` or `EXECUTING` state.
 - **Collision Detection** (always active): Self-collision is monitored every `get_state_period`. `CancelControl()` and stream close are called automatically if link distance falls below `collision_threshold`.
-- **Predictive Collision Check** (`Pre_collision_detection_enable`): Before executing a command, the driver evaluates the target joint configuration (or solves IK for Cartesian targets) against the URDF collision model and rejects commands that would lead to a collision.
-- **Collision Recovery** (`collision_recovery_enable`): When a collision is detected and this flag is set, the driver automatically retreats the robot to its initial pose. Does not activate if predictive checking is also enabled.
+- **Predictive Collision Check**: Before executing a command, the driver evaluates the target joint configuration (or solves IK for Cartesian targets) against the URDF collision model and prints a warning if a collision is predicted.
 
 ---
 
@@ -418,8 +536,8 @@ The `RobotState.control_manager_state` field (and the `robot_state` topic) uses 
 | `cancel_control` | `std_srvs/Trigger` | Cancel all active motion commands immediately |
 | `get_cartesian_pose` | `rby1_msgs/GetCartesianPose` | Query Cartesian transform between two links |
 | `control_manager_command` | `rby1_msgs/ControlManagerCommand` | Send `CMD_ENABLE` / `CMD_DISABLE` / `CMD_RESET` to the Control Manager |
-| `set_collision_safety` | `rby1_msgs/StateOnOff` | Enable (`state=true`) or disable (`state=false`) automatic retreat to initial safe pose on collision. |
 | `stream_control` | `rby1_msgs/StateOnOff` | Enable/disable persistent streaming mode with 10-minute hold times (`state=true` to enable, `state=false` to disable) |
+| `hardware_control` | `rby1_msgs/StateOnOff` | Claim (`state=true`) or release (`state=false`) hardware control rights for direct controller managers |
 
 #### `ControlManagerCommand` constants
 
@@ -489,3 +607,6 @@ The `RobotState.control_manager_state` field (and the `robot_state` topic) uses 
 | `output_voltage` | `int32` | Output voltage in millivolts |
 | `digital_input_a/b` | `bool` | Digital input A/B state |
 | `digital_output_a/b` | `bool` | Digital output A/B state |
+
+---
+

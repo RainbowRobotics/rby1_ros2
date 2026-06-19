@@ -583,7 +583,9 @@
         </collision>
     </link>
 
-    <link name="ee_right">
+    <link name="ee_right"/>
+    
+    <link name="gripper_right">
         <inertial>
             <mass value="0.46704998"/>
             <origin rpy="0 0 0" xyz="0.00212703 0.00000615 -0.04287176"/>
@@ -593,19 +595,19 @@
 
         <visual>
             <geometry>
-                <mesh filename="package://rby1_description/meshes/rby1m/EE_BODY.dae"/>
+                <mesh filename="package://rby1_description/meshes/rby1a/EE_BODY.dae"/>
             </geometry>
         </visual>
 
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://rby1_description/meshes/rby1m/EE_BODY.dae"/>
+                <mesh filename="package://rby1_description/meshes/rby1a/EE_BODY.dae"/>
             </geometry>
         </collision>
     </link>
 
-    <link name="ee_finger_r1">
+    <link name="gripper_finger_r1">
         <inertial>
             <mass value="0.03326999"/>
             <origin rpy="0 0 0" xyz="0.00278346 -0.00000329 -0.02570112"/>
@@ -615,19 +617,19 @@
 
         <visual>
             <geometry>
-                <mesh filename="package://rby1_description/meshes/rby1m/EE_FINGER.dae"/>
+                <mesh filename="package://rby1_description/meshes/rby1a/EE_FINGER.dae"/>
             </geometry>
         </visual>
 
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://rby1_description/meshes/rby1m/EE_FINGER.dae"/>
+                <mesh filename="package://rby1_description/meshes/rby1a/EE_FINGER.dae"/>
             </geometry>
         </collision>
     </link>
 
-    <link name="ee_finger_r2">
+    <link name="gripper_finger_r2">
         <inertial>
             <mass value="0.03326999"/>
             <origin rpy="0 0 0" xyz="0.00278346 -0.00000329 -0.02570112"/>
@@ -637,19 +639,21 @@
 
         <visual>
             <geometry>
-                <mesh filename="package://rby1_description/meshes/rby1m/EE_FINGER.dae"/>
+                <mesh filename="package://rby1_description/meshes/rby1a/EE_FINGER.dae"/>
             </geometry>
         </visual>
 
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://rby1_description/meshes/rby1m/EE_FINGER.dae"/>
+                <mesh filename="package://rby1_description/meshes/rby1a/EE_FINGER.dae"/>
             </geometry>
         </collision>
     </link>
 
-    <link name="ee_left">
+    <link name="ee_left"/>
+    
+    <link name="gripper_left">
         <inertial>
             <mass value="0.46704998"/>
             <origin rpy="0 0 0" xyz="0.00212703 0.00000615 -0.04287176"/>
@@ -659,19 +663,19 @@
 
         <visual>
             <geometry>
-                <mesh filename="package://rby1_description/meshes/rby1m/EE_BODY.dae"/>
+                <mesh filename="package://rby1_description/meshes/rby1a/EE_BODY.dae"/>
             </geometry>
         </visual>
 
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://rby1_description/meshes/rby1m/EE_BODY.dae"/>
+                <mesh filename="package://rby1_description/meshes/rby1a/EE_BODY.dae"/>
             </geometry>
         </collision>
     </link>
 
-    <link name="ee_finger_l1">
+    <link name="gripper_finger_l1">
         <inertial>
             <mass value="0.03326999"/>
             <origin rpy="0 0 0" xyz="0.00278346 -0.00000329 -0.02570112"/>
@@ -681,19 +685,19 @@
 
         <visual>
             <geometry>
-                <mesh filename="package://rby1_description/meshes/rby1m/EE_FINGER.dae"/>
+                <mesh filename="package://rby1_description/meshes/rby1a/EE_FINGER.dae"/>
             </geometry>
         </visual>
 
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://rby1_description/meshes/rby1m/EE_FINGER.dae"/>
+                <mesh filename="package://rby1_description/meshes/rby1a/EE_FINGER.dae"/>
             </geometry>
         </collision>
     </link>
 
-    <link name="ee_finger_l2">
+    <link name="gripper_finger_l2">
         <inertial>
             <mass value="0.03326999"/>
             <origin rpy="0 0 0" xyz="0.00278346 -0.00000329 -0.02570112"/>
@@ -703,14 +707,14 @@
 
         <visual>
             <geometry>
-                <mesh filename="package://rby1_description/meshes/rby1m/EE_FINGER.dae"/>
+                <mesh filename="package://rby1_description/meshes/rby1a/EE_FINGER.dae"/>
             </geometry>
         </visual>
 
         <collision>
             <origin xyz="0 0 0" rpy="0 0 0"/>
             <geometry>
-                <mesh filename="package://rby1_description/meshes/rby1m/EE_FINGER.dae"/>
+                <mesh filename="package://rby1_description/meshes/rby1a/EE_FINGER.dae"/>
             </geometry>
         </collision>
     </link>
@@ -1137,32 +1141,40 @@
 
     <joint name="tool_right" type="fixed">
         <parent link="link_right_arm_6"/>
-        <child link="FT_sensor_R"/>
+        <child link="FT_sensor_R"/> 
         <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 -0.1087"/>
         <axis xyz="0 0 1"/>
     </joint>
 
-    <joint name="FT_Sensor_END_right" type="fixed">
+    <joint name="ee_right_joint" type="fixed">
         <parent link="FT_sensor_R"/>
         <child link="ee_right"/>
+        <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+        <axis xyz="0 0 1"/>
+    </joint>
+
+    <joint name="gripper_right_joint" type="fixed">
+        <parent link="ee_right"/>
+        <child link="gripper_right"/>
         <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 -0.0461"/>
         <axis xyz="0 0 1"/>
     </joint>
 
-    <joint name="gripper_finger_r1" type="prismatic" in_model_type="fixed">
-        <parent link="ee_right"/>
-        <child link="ee_finger_r1"/>
+    <joint name="gripper_finger_r1_joint" type="prismatic" in_model_type="fixed">
+        <parent link="gripper_right"/>
+        <child link="gripper_finger_r1"/>
         <origin rpy="0.0 0.0 0.0" xyz="0.003 0.0 -0.073"/>
         <axis xyz="-1 0 0"/>
         <limit effort="1000" velocity="0.05" lower="-0.05" upper="0"/>
     </joint>
 
-    <joint name="gripper_finger_r2" type="prismatic" in_model_type="fixed">
-        <parent link="ee_right"/>
-        <child link="ee_finger_r2"/>
+    <joint name="gripper_finger_r2_joint" type="prismatic" in_model_type="fixed">
+        <parent link="gripper_right"/>
+        <child link="gripper_finger_r2"/>
         <origin rpy="0.0 0.0 3.1415926535" xyz="-0.003 0.0 -0.073"/>
-        <axis xyz="1 0 0"/>
+        <axis xyz="-1 0 0"/>
         <limit effort="1000" velocity="0.05" lower="0" upper="0.05"/>
+        <mimic joint="gripper_finger_r1_joint" multiplier="1.0" offset="0.0"/>
     </joint>
 
     <joint name="tool_left" type="fixed">
@@ -1172,27 +1184,35 @@
         <axis xyz="0 0 1"/>
     </joint>
 
-    <joint name="FT_Sensor_END_left" type="fixed">
+    <joint name="ee_left_joint" type="fixed">
         <parent link="FT_sensor_L"/>
         <child link="ee_left"/>
+        <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+        <axis xyz="0 0 1"/>
+    </joint>
+
+    <joint name="gripper_left_joint" type="fixed">
+        <parent link="ee_left"/>
+        <child link="gripper_left"/>
         <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 -0.0461"/>
         <axis xyz="0 0 1"/>
     </joint>
 
-    <joint name="gripper_finger_l1" type="prismatic" in_model_type="fixed">
-        <parent link="ee_left"/>
-        <child link="ee_finger_l1"/>
+    <joint name="gripper_finger_l1_joint" type="prismatic" in_model_type="fixed">
+        <parent link="gripper_left"/>
+        <child link="gripper_finger_l1"/>
         <origin rpy="0.0 0.0 0.0" xyz="0.003 0.0 -0.073"/>
         <axis xyz="-1 0 0"/>
         <limit effort="1000" velocity="0.05" lower="-0.05" upper="0"/>
     </joint>
 
-    <joint name="gripper_finger_l2" type="prismatic" in_model_type="fixed">
-        <parent link="ee_left"/>
-        <child link="ee_finger_l2"/>
+    <joint name="gripper_finger_l2_joint" type="prismatic" in_model_type="fixed">
+        <parent link="gripper_left"/>
+        <child link="gripper_finger_l2"/>
         <origin rpy="0.0 0.0 3.1415926535" xyz="-0.003 0.0 -0.073"/>
-        <axis xyz="1 0 0"/>
+        <axis xyz="-1 0 0"/>
         <limit effort="1000" velocity="0.05" lower="0" upper="0.05"/>
+        <mimic joint="gripper_finger_l1_joint" multiplier="1.0" offset="0.0"/>
     </joint>
 
     <joint name="head_base" type="fixed">
