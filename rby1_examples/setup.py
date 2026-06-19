@@ -40,7 +40,7 @@ setup(
             '11_cancel_control = rby1_examples.11_cancel_control:main',
             '12_mobile_base_control = rby1_examples.12_mobile_base_control:main',
             '13_stream_command = rby1_examples.13_stream_command:main',
-            '15_collision_safety_control = rby1_examples.15_collision_safety_control:main',
+            '14_collision_safety_control = rby1_examples.15_collision_safety_control:main',
         ],
     },
 )
