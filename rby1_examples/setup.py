@@ -12,7 +12,7 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*')))
+        # (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*')))
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -40,7 +40,7 @@ setup(
             '11_cancel_control = rby1_examples.11_cancel_control:main',
             '12_mobile_base_control = rby1_examples.12_mobile_base_control:main',
             '13_stream_command = rby1_examples.13_stream_command:main',
-            '14_collision_safety_control = rby1_examples.15_collision_safety_control:main',
+            '14_collision_safety_control = rby1_examples.14_collision_safety_control:main',
         ],
     },
 )
