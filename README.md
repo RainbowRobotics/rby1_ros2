@@ -86,7 +86,7 @@ Because the workspace was built with `--symlink-install`, **no rebuild is needed
 |-----------|---------|------|-------------|
 | `robot_ip` | `"127.0.0.1:50051"` | - | Robot IP address and gRPC port |
 | `model` | `"m"` | - | Robot model — `"a"` (RBY1-A) or `"m"` (RBY1-M) |
-| `get_state_period` | `0.01` | s | State publish interval — default 100 Hz |
+| `get_state_period` | `0.01` | s | State publish interval — default 0.01(100 Hz) |
 | `publish_battery_state` | `true` | - | Enable battery state topic |
 | `publish_tool_flange_state` | `true` | - | Enable tool flange state topics (left + right) |
 
@@ -95,7 +95,6 @@ Because the workspace was built with `--symlink-install`, **no rebuild is needed
 > [!NOTE]
 > **`get_state_period` and communication frequency:**  
 > `get_state_period` sets the interval (in seconds) at which the driver reads the robot state via `GetState()` and publishes all state topics.  
-> For example, `0.01 s` → approximately **100 Hz** publishing rate.  
 > Actual throughput may be slightly lower (97–100 Hz) depending on PC environment and CPU load.
 
 ![get_state_period_1](Doc/img/topic_hz.png)
@@ -129,8 +128,6 @@ source install/setup.bash
 # Option A: Launch normally
 ros2 launch rby1_driver rby1_ros2_driver.launch.py
 
-# Option B: Launch with a custom namespace (topic names remain relative)
-ros2 launch rby1_driver rby1_ros2_driver.launch.py namespace:=my_robot
 ```
 
 ### 1-9. Run Examples
