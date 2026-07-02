@@ -2800,6 +2800,17 @@ void RBY1_ROS2_DRIVER<ModelType>::set_trajectory_impedance_callback(
         request,
     std::shared_ptr<rby1_msgs::srv::SetTrajectoryImpedance::Response>
         response) {
+  std::lock_guard<std::mutex> lock(mutex_);
+
+  {
+    std::lock_guard<std::mutex> stream_lock(stream_mutex_);
+    if (stream_active_) {
+      response->success = false;
+      response->message = "Cannot configure trajectory impedance while persistent stream is active. Please close the stream first.";
+      RCLCPP_WARN(this->get_logger(), "[TRAJECTORY IMPEDANCE] %s", response->message.c_str());
+      return;
+    }
+  }
 
   // For Torso
   bool torso_active = (request->state.size() > 0) ? request->state[0] : false;

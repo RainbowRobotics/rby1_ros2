@@ -4,13 +4,6 @@
     robot_ip: "127.0.0.1:50051"
     model: "m" # A or M , a or m
 
-    # power on & servo on & enable when you launch ros2_driver
-
-    # power on
-    power_on: ["all"] # example: ["5"], ["12,24,48"] , ["all"]
-
-    # servo on
-    servo_on: ["all"] # example: ["torso"], ["right_arm, left_arm"] ,["right_arm_1, left_arm_3"], ["all"]
 
     # drive parameters
     get_state_period: 0.01 # seconds
