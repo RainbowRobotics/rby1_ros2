@@ -375,8 +375,6 @@ The driver checks the **target pose** for collisions *before* executing any join
 |-----------|---------|------|-------------|
 | `robot_ip` | `"127.0.0.1:50051"` | - | Robot IP address and gRPC port |
 | `model` | `"m"` | - | Robot model — `"a"` (RBY1-A) or `"m"` (RBY1-M) |
-| `power_on` | `["all"]` | - | List of power domains/devices to initialize (used if `initialize_robot` is enabled) |
-| `servo_on` | `["all"]` | - | List of joint parts to enable servos on (used if `initialize_robot` is enabled) |
 | `get_state_period` | `0.01` | s | State publish interval — default 0.01 (100 Hz) |
 | `minimum_time` | `2.0` | s | Default minimum execution time for motion commands |
 | `stream_hz` | `30.0` | Hz | Frequency for trajectory streaming |
@@ -422,45 +420,50 @@ The RBY1 ROS 2 package supports both direct control (via stand-alone services, a
 
 ```mermaid
 graph TD
-    subgraph User Space (User Nodes / Motion Planners)
+    subgraph user_space ["User Space"]
         UserNode[User Node / Examples]
         MoveIt[MoveIt 2 / MoveGroup]
     end
 
-    subgraph ROS 2 Control & Driver Layer
-        subgraph rby1_ros2_driver (C++ Node)
+    subgraph driver_control ["ROS 2 Control & Driver Layer"]
+        subgraph driver ["rby1_ros2_driver C++ Node"]
             DriverState[State Publisher]
             DriverSrv[Service Handlers]
             DriverAction[Action Servers]
         end
 
-        subgraph ros2_control (Controller Manager)
+        subgraph control ["ros2_control Controller Manager"]
             Controllers[JointTrajectory & Gripper Controllers]
             HWInterface[rby1_hardware::RBY1SystemHardware]
         end
     end
 
-    subgraph Robot / Simulation Layer
+    subgraph robot_layer ["Robot / Simulation Layer"]
         Robot[RBY1 Robot / Sim]
     end
 
     %% Connections
-    UserNode -->|Topics / Services / Actions| rby1_ros2_driver
-    MoveIt -->|FollowJointTrajectory| Controllers
+    UserNode -->|Subscribe State| DriverState
+    UserNode -->|Call Services| DriverSrv
+    UserNode -->|Send Actions| DriverAction
+    
+    MoveIt -->|Send Trajectory| Controllers
     Controllers -->|Read State / Write Command| HWInterface
 
     %% Coordination
-    HWInterface -->|Claim Control / Power / Servo Services| DriverSrv
+    HWInterface -->|Claim Control / Power / Servo| DriverSrv
 
     %% gRPC Connections
-    rby1_ros2_driver -->|gRPC (State / Commands)| Robot
-    HWInterface -->|gRPC (Streaming Commands)| Robot
+    DriverState -->|gRPC| Robot
+    DriverSrv -->|gRPC| Robot
+    DriverAction -->|gRPC| Robot
+    HWInterface -->|gRPC Direct Stream| Robot
 
     classDef pkg fill:#1e293b,stroke:#475569,stroke-width:2px,color:#f8fafc;
     classDef comp fill:#334155,stroke:#64748b,stroke-width:1px,color:#f8fafc;
     classDef robot fill:#14532d,stroke:#15803d,stroke-width:2px,color:#f8fafc;
     
-    class rby1_ros2_driver,ros2_control,MoveIt,UserNode pkg;
+    class MoveIt,UserNode pkg;
     class DriverState,DriverSrv,DriverAction,Controllers,HWInterface comp;
     class Robot robot;
 ```
