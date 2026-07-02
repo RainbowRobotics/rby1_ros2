@@ -175,6 +175,10 @@ ros2 run rby1_examples <example_name>
 > ⚠️ **If you are using stream-based control (e.g., `cmd_vel`, Example 13), calling `cancel_control` will also shut down the stream.**  
 > You will need to re-open the stream (`/stream_control state: true`) before sending further commands.  
 > If you only want to pause or cancel a specific motion while keeping the stream alive, use the action cancel instead (see Example 13).
+>
+> If an issue arises, please check the [Troubleshooting & Known Issues](#troubleshooting) section to see if there is any relevant information.
+
+
 
 ## 2. Visualization & Robot Description (`rby1_description`)
 
@@ -292,63 +296,6 @@ Each MoveIt package spawns the following controllers:
 | `both_arms_controller` | `JointTrajectoryController` | All arm joints (left + right) |
 | `body_controller` | `JointTrajectoryController` | Torso + Head + Both Arms |
 
-
-## 4. Troubleshooting & Known Issues
-
-### Issue: MoveIt Known Issues
-
-#### ⚠️ Warning: `Missing gripper_finger_r2_joint` / `gripper_finger_l2_joint`
-
-```
-[WARN] The complete state of the robot is not yet known. Missing gripper_finger_r2_joint
-```
-
-**Cause**: `gripper_finger_r2_joint` and `gripper_finger_l2_joint` are **mimic joints** (linked to `r1`/`l1` via `<mimic>` in the URDF) and are not registered in `ros2_control`. The `joint_state_broadcaster` does not publish state for them, so MoveIt's planning scene monitor raises this warning.
-
-**Impact**: **None** — motion planning and execution for all controlled joints works correctly. This warning can be safely ignored.
-
-#### ⚠️ Hardware Control Handoff
-
-When `ros2 launch rby1_moveit_* demo.launch.py` is launched with real hardware, the `RBY1SystemHardware` plugin calls `/hardware_control state:=true` to take exclusive control from the driver. During this period, direct action commands sent to the driver (e.g. `robot_joint`) will be rejected. Control is returned to the driver when MoveIt is shut down (`Ctrl+C`).
-
-### Issue: Control Commands Rejected After Trajectory Stream Interruptions
-
-* **Symptom**: 
-  If a stream-based trajectory control node (e.g., using persistent trajectory streams) is suddenly terminated or killed mid-operation, the driver's stream state remains active. Until this stream mode is explicitly closed, the driver will reject all other incoming joint or Cartesian motion commands, resulting in errors.
-  
-* **Resolution**: 
-  You must manually disable the streaming state by calling the `/stream_control` service with `state: false` in a separate terminal. This terminates the lingering stream and restores normal control capabilities.
-
-  ```bash
-  ros2 service call /stream_control rby1_msgs/srv/StateOnOff "{state: false}"
-  ``` 
-
-### Issue: Driver Shutdown on Startup due to Collision
-
-* **Symptom**:
-  If you launch the driver while the robot is already in a collision state (especially common when launching in simulation where default/initial joint states overlap), the driver will detect the collision and immediately log a FATAL error and terminate for safety.
-  
-* **Resolution**:
-  Temporarily decrease the `collision_threshold` parameter in `driver_parameters.yaml` (e.g. to a very small value or `0.0`), launch the driver safely, command the robot joints to move to a safe, non-colliding pose, and then restore `collision_threshold` to its original value.
-
-### Issue: Client-Side Warnings `Ignoring unexpected goal/result response`
-
-* **Symptom**:
-  When running sequential Python examples (e.g., `13_stream_command`), the terminal outputs warnings like `Ignoring unexpected goal response. There may be more than one action server for the action 'robot_joint'` or `Ignoring unexpected result response`.
-  This occurs because:
-  1. Persistent streaming makes the action server return success immediately. If the client completes the goal before the Python client-side state machine processes the goal acceptance, a race condition occurs.
-  2. Standard blocking calls like `time.sleep()` prevent the ROS 2 executor thread from spinning, causing DDS status updates to accumulate and get processed out of order during the next goal spin.
-
-* **Resolution**:
-  1. The C++ driver has been updated to introduce a 50ms delay (`std::this_thread::sleep_for(std::chrono::milliseconds(50))`) before completing streaming commands to ensure the client-side state machine is ready.
-  2. In your sequential Python nodes, avoid using standard `time.sleep()`. Instead, implement a non-blocking spin-sleep function (e.g., `rclpy.spin_once` in a loop) to keep draining the DDS network queue:
-
-> [!NOTE]
-> **Simulator Limitation**: Battery voltage, FT sensor, and IMU data read as `0.0` in simulation (no physical hardware).
-> **Tool flange topics**: Requires `publish_tool_flange_state: true` in `driver_parameters.yaml`.
-
----
-
 ## 4. Key Features
 
 ### Robot Control
@@ -363,9 +310,6 @@ When `ros2 launch rby1_moveit_* demo.launch.py` is launched with real hardware, 
 - Motion commands are rejected if the Control Manager is not in `ENABLE` or `EXECUTING` state.
 - Minor faults encountered during execution are automatically reset and control is resumed.
 
-#### Always-On Collision Detection
-Self-collision monitoring is **always active** regardless of any parameter settings. The driver monitors link distances reported by the SDK on every state read cycle (`get_state_period`). When the minimum link distance falls below `collision_threshold`, the driver immediately calls `CancelControl()` and closes the stream.
-
 #### Predictive Collision Checking
 The driver checks the **target pose** for collisions *before* executing any joint or Cartesian command:
 - **Joint commands**: uses the URDF-based dynamics model to evaluate the target joint configuration for link collisions.
@@ -375,48 +319,9 @@ The driver checks the **target pose** for collisions *before* executing any join
 
 ---
 
-## 5. Package Structure & Architecture
+## 5. Package Architecture
 
-### 5-0. Config/driver_parameters.yaml
-
-| Parameter | Default | Unit | Description |
-|-----------|---------|------|-------------|
-| `robot_ip` | `"127.0.0.1:50051"` | - | Robot IP address and gRPC port |
-| `model` | `"m"` | - | Robot model — `"a"` (RBY1-A) or `"m"` (RBY1-M) |
-| `get_state_period` | `0.01` | s | State publish interval — default 0.01 (100 Hz) |
-| `minimum_time` | `2.0` | s | Default minimum execution time for motion commands |
-| `stream_hz` | `30.0` | Hz | Frequency for trajectory streaming |
-| `angular_velocity_limit` | `4.712388` | rad/s | Joint angular velocity limit |
-| `linear_velocity_limit` | `1.5` | m/s | Cartesian linear velocity limit |
-| `acceleration_limit` | `1.0` | - | Acceleration scaling factor |
-| `stop_orientation_tracking_error` | `1e-5` | rad | Orientation tracking error threshold to detect stop |
-| `stop_position_tracking_error` | `1e-5` | m | Position tracking error threshold to detect stop |
-| `se2_minimum_time` | `1.0` | s | Minimum execution time (interpolation ramp) for SE2 velocity commands |
-| `se2_linear_acceleration_limit` | `0.5` | m/s² | Linear acceleration limit for SE2 velocity commands |
-| `se2_angular_acceleration_limit` | `0.5` | rad/s² | Angular acceleration limit for SE2 velocity commands |
-| `fault_reset_trigger` | `false` | - | Auto-reset MAJOR/MINOR fault on driver startup |
-| `collision_threshold` | `0.02` | m | Minimum link-distance threshold for collision detection |
-| `publish_battery_state` | `true` | - | Enable battery state topic |
-| `publish_tool_flange_state` | `true` | - | Enable tool flange state topics (left + right) |
-
-### 5-1. Package Structure
-
-| Package | Role |
-|---------|------|
-| `rby1_driver` | C++ main driver node. Wraps the RBY1 SDK and exposes a ROS 2 interface. |
-| `rby1_msgs` | Custom message, service, and action definitions for robot control and state. |
-| `rby1_examples` | Python example scripts demonstrating all major driver features. |
-| `rby1_description` | Robot description for ROS, demonstrating URDF and Mesh files, and simple visualization launch file. |
-| `rby1_hardware` | `ros2_control` SystemInterface plugin (`RBY1SystemHardware`). Bridges the RBY1 SDK to MoveIt 2 via the standard `ros2_control` hardware interface pipeline. |
-| `rby1_moveit_a_1_0` | MoveIt 2 configuration package for **Model A v1.0** (SRDF, controllers, kinematics, joint limits). |
-| `rby1_moveit_a_1_1` | MoveIt 2 configuration package for **Model A v1.1**. |
-| `rby1_moveit_a_1_2` | MoveIt 2 configuration package for **Model A v1.2**. |
-| `rby1_moveit_m_1_0` | MoveIt 2 configuration package for **Model M v1.0**. |
-| `rby1_moveit_m_1_1` | MoveIt 2 configuration package for **Model M v1.1**. |
-| `rby1_moveit_m_1_2` | MoveIt 2 configuration package for **Model M v1.2**. |
-| `rby1_moveit_m_1_3` | MoveIt 2 configuration package for **Model M v1.3**. |
-
-### 5-2. System Architecture
+### 5-1. System Architecture
 
 The RBY1 ROS 2 package supports both direct control (via stand-alone services, actions, and topics in the `rby1_ros2_driver` C++ node) and MoveIt 2 motion planning (via the standard `ros2_control` pipeline and `rby1_hardware::RBY1SystemHardware` system interface).
 
@@ -471,6 +376,44 @@ graph TD
     class DriverState,DriverSrv,DriverAction,Controllers,HWInterface comp;
     class Robot robot;
 ```
+### 5-2. Config/driver_parameters.yaml
+
+| Parameter | Default | Unit | Description |
+|-----------|---------|------|-------------|
+| `robot_ip` | `"127.0.0.1:50051"` | - | Robot IP address and gRPC port |
+| `model` | `"m"` | - | Robot model — `"a"` (RBY1-A) or `"m"` (RBY1-M) |
+| `get_state_period` | `0.01` | s | State publish interval — default 0.01 (100 Hz) |
+| `minimum_time` | `2.0` | s | Default minimum execution time for motion commands |
+| `stream_hz` | `30.0` | Hz | Frequency for trajectory streaming |
+| `angular_velocity_limit` | `4.712388` | rad/s | Joint angular velocity limit |
+| `linear_velocity_limit` | `1.5` | m/s | Cartesian linear velocity limit |
+| `acceleration_limit` | `1.0` | - | Acceleration scaling factor |
+| `stop_orientation_tracking_error` | `1e-5` | rad | Orientation tracking error threshold to detect stop |
+| `stop_position_tracking_error` | `1e-5` | m | Position tracking error threshold to detect stop |
+| `se2_minimum_time` | `1.0` | s | Minimum execution time (interpolation ramp) for SE2 velocity commands |
+| `se2_linear_acceleration_limit` | `0.5` | m/s² | Linear acceleration limit for SE2 velocity commands |
+| `se2_angular_acceleration_limit` | `0.5` | rad/s² | Angular acceleration limit for SE2 velocity commands |
+| `fault_reset_trigger` | `false` | - | Auto-reset MAJOR/MINOR fault on driver startup |
+| `collision_threshold` | `0.02` | m | Minimum link-distance threshold for collision detection |
+| `publish_battery_state` | `true` | - | Enable battery state topic |
+| `publish_tool_flange_state` | `true` | - | Enable tool flange state topics (left + right) |
+
+### 5-3. Package Structure
+
+| Package | Role |
+|---------|------|
+| `rby1_driver` | C++ main driver node. Wraps the RBY1 SDK and exposes a ROS 2 interface. |
+| `rby1_msgs` | Custom message, service, and action definitions for robot control and state. |
+| `rby1_examples` | Python example scripts demonstrating all major driver features. |
+| `rby1_description` | Robot description for ROS, demonstrating URDF and Mesh files, and simple visualization launch file. |
+| `rby1_hardware` | `ros2_control` SystemInterface plugin (`RBY1SystemHardware`). Bridges the RBY1 SDK to MoveIt 2 via the standard `ros2_control` hardware interface pipeline. |
+| `rby1_moveit_a_1_0` | MoveIt 2 configuration package for **Model A v1.0** (SRDF, controllers, kinematics, joint limits). |
+| `rby1_moveit_a_1_1` | MoveIt 2 configuration package for **Model A v1.1**. |
+| `rby1_moveit_a_1_2` | MoveIt 2 configuration package for **Model A v1.2**. |
+| `rby1_moveit_m_1_0` | MoveIt 2 configuration package for **Model M v1.0**. |
+| `rby1_moveit_m_1_1` | MoveIt 2 configuration package for **Model M v1.1**. |
+| `rby1_moveit_m_1_2` | MoveIt 2 configuration package for **Model M v1.2**. |
+| `rby1_moveit_m_1_3` | MoveIt 2 configuration package for **Model M v1.3**. |
 
 ## 6. Control Manager States
 
@@ -657,5 +600,61 @@ The `RobotState.control_manager_state` field (and the `robot_state` topic) uses 
 | `digital_input_b` | `bool` | State of general-purpose digital input B |
 | `digital_output_a` | `bool` | State of general-purpose digital output A |
 | `digital_output_b` | `bool` | State of general-purpose digital output B |
+
+---
+
+## <a id="troubleshooting"></a>9. Troubleshooting & Known Issues
+
+### Issue: MoveIt Known Issues
+
+#### ⚠️ Warning: `Missing gripper_finger_r2_joint` / `gripper_finger_l2_joint`
+
+```
+[WARN] The complete state of the robot is not yet known. Missing gripper_finger_r2_joint
+```
+
+**Cause**: `gripper_finger_r2_joint` and `gripper_finger_l2_joint` are **mimic joints** (linked to `r1`/`l1` via `<mimic>` in the URDF) and are not registered in `ros2_control`. The `joint_state_broadcaster` does not publish state for them, so MoveIt's planning scene monitor raises this warning.
+
+**Impact**: **None** — motion planning and execution for all controlled joints works correctly. This warning can be safely ignored.
+
+#### ⚠️ Hardware Control Handoff
+
+When `ros2 launch rby1_moveit_* demo.launch.py` is launched with real hardware, the `RBY1SystemHardware` plugin calls `/hardware_control state:=true` to take exclusive control from the driver. During this period, direct action commands sent to the driver (e.g. `robot_joint`) will be rejected. Control is returned to the driver when MoveIt is shut down (`Ctrl+C`).
+
+### Issue: Control Commands Rejected After Trajectory Stream Interruptions
+
+* **Symptom**: 
+  If a stream-based trajectory control node (e.g., using persistent trajectory streams) is suddenly terminated or killed mid-operation, the driver's stream state remains active. Until this stream mode is explicitly closed, the driver will reject all other incoming joint or Cartesian motion commands, resulting in errors.
+  
+* **Resolution**: 
+  You must manually disable the streaming state by calling the `/stream_control` service with `state: false` in a separate terminal. This terminates the lingering stream and restores normal control capabilities.
+
+  ```bash
+  ros2 service call /stream_control rby1_msgs/srv/StateOnOff "{state: false}"
+  ``` 
+
+### Issue: Driver Shutdown on Startup due to Collision
+
+* **Symptom**:
+  If you launch the driver while the robot is already in a collision state (especially common when launching in simulation where default/initial joint states overlap), the driver will detect the collision and immediately log a FATAL error and terminate for safety.
+  
+* **Resolution**:
+  Temporarily decrease the `collision_threshold` parameter in `driver_parameters.yaml` (e.g. to a very small value or `0.0`), launch the driver safely, command the robot joints to move to a safe, non-colliding pose, and then restore `collision_threshold` to its original value.
+
+### Issue: Client-Side Warnings `Ignoring unexpected goal/result response`
+
+* **Symptom**:
+  When running sequential Python examples (e.g., `13_stream_command`), the terminal outputs warnings like `Ignoring unexpected goal response. There may be more than one action server for the action 'robot_joint'` or `Ignoring unexpected result response`.
+  This occurs because:
+  1. Persistent streaming makes the action server return success immediately. If the client completes the goal before the Python client-side state machine processes the goal acceptance, a race condition occurs.
+  2. Standard blocking calls like `time.sleep()` prevent the ROS 2 executor thread from spinning, causing DDS status updates to accumulate and get processed out of order during the next goal spin.
+
+* **Resolution**:
+  1. The C++ driver has been updated to introduce a 50ms delay (`std::this_thread::sleep_for(std::chrono::milliseconds(50))`) before completing streaming commands to ensure the client-side state machine is ready.
+  2. In your sequential Python nodes, avoid using standard `time.sleep()`. Instead, implement a non-blocking spin-sleep function (e.g., `rclpy.spin_once` in a loop) to keep draining the DDS network queue:
+
+> [!NOTE]
+> **Simulator Limitation**: Battery voltage, FT sensor, and IMU data read as `0.0` in simulation (no physical hardware).
+> **Tool flange topics**: Requires `publish_tool_flange_state: true` in `driver_parameters.yaml`.
 
 ---
