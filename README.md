@@ -90,7 +90,7 @@ Because the workspace was built with `--symlink-install`, **no rebuild is needed
 > If you use simulation for testing, keep `robot_ip: "127.0.0.1:50051"`.  
 > Some state values (battery, tool flange FT/IMU) will show zeros in simulation because no physical sensors are attached.
 
-- Main Parameters(for the detail of driver_parameters.yaml, see [here](#50-configdriver_parametersyaml))
+- Main Parameters(for the detail of driver_parameters.yaml, see config/driver_parametersyaml)
 
 | Parameter | Default | Unit | Description |
 |-----------|---------|------|-------------|
@@ -177,6 +177,12 @@ ros2 run rby1_examples <example_name>
 > If you only want to pause or cancel a specific motion while keeping the stream alive, use the action cancel instead (see Example 13).
 >
 > If an issue arises, please check the [Troubleshooting & Known Issues](#troubleshooting) section to see if there is any relevant information.
+
+> [!NOTE]
+> **Simulator Limitation**: Battery voltage, FT sensor, and IMU data read as `0.0` in simulation (no physical hardware).
+> **Tool flange topics**: Requires `publish_tool_flange_state: true` in `driver_parameters.yaml`.
+
+---
 
 
 
@@ -653,8 +659,3 @@ When `ros2 launch rby1_moveit_* demo.launch.py` is launched with real hardware, 
   1. The C++ driver has been updated to introduce a 50ms delay (`std::this_thread::sleep_for(std::chrono::milliseconds(50))`) before completing streaming commands to ensure the client-side state machine is ready.
   2. In your sequential Python nodes, avoid using standard `time.sleep()`. Instead, implement a non-blocking spin-sleep function (e.g., `rclpy.spin_once` in a loop) to keep draining the DDS network queue:
 
-> [!NOTE]
-> **Simulator Limitation**: Battery voltage, FT sensor, and IMU data read as `0.0` in simulation (no physical hardware).
-> **Tool flange topics**: Requires `publish_tool_flange_state: true` in `driver_parameters.yaml`.
-
----
