@@ -12,6 +12,14 @@ It wraps the RBY1 C++ SDK into a ROS 2 node, providing state monitoring and mult
 - **OS**: Ubuntu 22.04
 - **SDK compatibility**: rby1-sdk `0.10.x` and later
 
+### System Architecture Overview
+
+![System Architecture](Doc/img/system_architecture.png)
+
+The system operates using two primary pipelines to interface with the robot:
+1. **Direct Control Mode (`rby1_ros2_driver`)**: A standalone C++ ROS 2 node that communicates directly with the RBY1 robot or simulator via gRPC. User applications/scripts send standard ROS 2 topics, services, and actions (e.g. `robot_joint`, `robot_cartesian`) to command movements and monitor status.
+2. **MoveIt 2 Integration (`rby1_hardware`)**: Bridges MoveIt 2 and `ros2_control` to the robot via a custom `RBY1SystemHardware` interface plugin. The hardware plugin streams command inputs to the robot via a direct gRPC connection, while querying status and coordinating power, servo states, and control rights with the `rby1_ros2_driver` node via internal ROS 2 service calls (like `/hardware_control`).
+
 ---
 
 ## 1. Quick Start
@@ -412,11 +420,7 @@ The driver checks the **target pose** for collisions *before* executing any join
 
 The RBY1 ROS 2 package supports both direct control (via stand-alone services, actions, and topics in the `rby1_ros2_driver` C++ node) and MoveIt 2 motion planning (via the standard `ros2_control` pipeline and `rby1_hardware::RBY1SystemHardware` system interface).
 
-#### 1) Overall System Block Diagram
-
-![System Architecture](Doc/img/system_architecture.png)
-
-#### 2) Sequence & Architecture Flow (Mermaid Diagram)
+#### Sequence & Architecture Flow (Mermaid Diagram)
 
 ```mermaid
 graph TD
@@ -467,10 +471,6 @@ graph TD
     class DriverState,DriverSrv,DriverAction,Controllers,HWInterface comp;
     class Robot robot;
 ```
-
-#### 3) Driver Node Internal Flow
-
-![driver](Doc/img/driver.png)
 
 ## 6. Control Manager States
 
